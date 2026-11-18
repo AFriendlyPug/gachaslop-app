@@ -87,3 +87,16 @@ fn text_over_the_hover_wash_blends() {
     assert_eq!(half[3], 140); // 128 + 26 * 127 / 255
     assert!(half[0] <= half[3]);
 }
+
+#[test]
+fn lines_are_spaced_like_the_clock() {
+    // Windows 10's 40px taskbar at 100%: Segoe UI 12px lines are 15px tall; the clock's time and date
+    // digits start at rows 6 and 24, which is where these lines put them (digits sit 3px into the line)
+    assert_eq!(line_tops(40, 15, 2, CLOCK_LINE_PITCH), [3, 21]);
+    // 150% scale: everything scales
+    assert_eq!(line_tops(60, 23, 2, 27), [5, 32]);
+    // a shorter taskbar: as far apart as fits, never overlapping
+    assert_eq!(line_tops(30, 15, 2, CLOCK_LINE_PITCH), [0, 15]);
+    // one game: centred
+    assert_eq!(line_tops(40, 15, 1, CLOCK_LINE_PITCH), [12]);
+}

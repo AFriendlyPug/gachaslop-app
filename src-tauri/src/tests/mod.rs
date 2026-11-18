@@ -7,6 +7,7 @@ mod scheduler;
 mod settings;
 mod system;
 mod time;
+mod toast;
 mod tray;
 mod widget;
 
@@ -29,7 +30,7 @@ pub fn fixture(name: &str) -> serde_json::Value {
 /// A rotation with one pick, whose icon file is "<feed>/<name>.png".
 pub fn rotation(kind: FeedKind, start: Ts, end: Ts, name: &str) -> Rotation {
     let icon = Icon { file: format!("{}/{name}.png", kind.key()), url: String::new() };
-    let pick = Pick { name: name.into(), marks: String::new(), icon: Some(icon) };
+    let pick = Pick { name: name.into(), marks: String::new(), icon: Some(icon), engine: None };
     Rotation::new(kind, start, end, vec![pick], vec![], vec![])
 }
 

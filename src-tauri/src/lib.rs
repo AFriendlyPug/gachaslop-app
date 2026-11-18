@@ -12,6 +12,7 @@ mod autostart;
 mod instance;
 mod tray;
 mod widget;
+mod toast;
 mod scheduler;
 mod commands;
 
@@ -36,7 +37,6 @@ pub fn run() {
     };
 
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::save_settings,
@@ -49,6 +49,11 @@ pub fn run() {
             commands::update_game,
             commands::delete_game,
             commands::preview_reset,
+            commands::test_notification,
+            commands::replay_catchup,
+            commands::set_tray_only,
+            commands::diagnostics,
+            commands::open_path,
             commands::hide_popup,
             commands::quit,
         ])

@@ -2,7 +2,7 @@
 // Each test sets the time zone it needs, so results don't depend on the PC running them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ago, countdown, fmtDuration, left, localDate, localTime, resetText, until, utcTime, utcToLocal }
+import { ago, countdown, fmtDuration, lasts, left, localDate, roughlyUntil, localTime, resetText, until, utcTime, utcToLocal }
   from "../src/lib/time.ts";
 
 const MIN = 60_000;
@@ -75,4 +75,26 @@ test("reset descriptions give UTC first, then local time", () => {
     assert.equal(resetText(3, 0, 0, now), "Daily 03:00 UTC (04:00 your time), weekly on Mondays (UTC)");
     assert.equal(resetText(19, 30, null, now), "Daily 19:30 UTC (20:30 your time)");
   });
+});
+
+test("an end at 13:59:59 is shown as 14:00", () => {
+  inZone("UTC", () => {
+    const end = utc(2026, 12, 1, 13, 59) + 59;
+    assert.equal(localDate(end), "Tue 1 Dec, 14:00");
+  });
+});
+
+test("how long a banner runs", () => {
+  const start = utc(2026, 11, 24, 3);
+  assert.equal(lasts(start, start + 14 * 86_400 - 1), "14 days"); // ends at 02:59:59
+  assert.equal(lasts(start, start + 86_400), "1 day");
+  assert.equal(lasts(start, start + 12 * 3600), "12 hours");
+  assert.equal(lasts(start, start + 3600), "1 hour");
+});
+
+test("rough countdown for banners days away", () => {
+  const now = Date.UTC(2026, 10, 18, 4, 31, 49);
+  assert.equal(roughlyUntil(now / 1000 + 5 * 86_400 + 21 * 3600 + 28 * 60, now), "in 5d 21h");
+  assert.equal(roughlyUntil(now / 1000 + 3 * 3600 + 5 * 60, now), "in 3h 5m");
+  assert.equal(roughlyUntil(now / 1000 - 10, now), "now");
 });

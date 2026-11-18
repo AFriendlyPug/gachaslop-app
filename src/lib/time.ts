@@ -3,8 +3,8 @@
 
 const MINUTE = 60_000;
 
-/** Unix seconds to a Date. */
-const date = (ts: number) => new Date(ts * 1000);
+/** Unix seconds to a Date. Sources give ends as 13:59:59: shown as the 14:00 they mean. */
+const date = (ts: number) => new Date((ts % 60 === 59 ? ts + 1 : ts) * 1000);
 
 /** "45m", "2h 15m" or "3d 4h", rounded up to the minute (same as time::fmt_duration in Rust). */
 export function fmtDuration(ms: number): string {
@@ -37,11 +37,25 @@ export function until(ts: number, now: number): string {
   return ms > 0 ? `in ${countdown(ms)}` : "now";
 }
 
+/** "in 5d 21h" until `ts`, to the minute: for things days or weeks away. "now" once it's here. */
+export function roughlyUntil(ts: number, now: number): string {
+  const ms = ts * 1000 - now;
+  return ms > 0 ? `in ${fmtDuration(ms)}` : "now";
+}
+
 /** "just now", "5m ago", "3d 2h ago"; "never" for no time. */
 export function ago(ts: number | null, now: number): string {
   if (ts === null) return "never";
   const ms = now - ts * 1000;
   return ms < MINUTE ? "just now" : `${fmtDuration(ms)} ago`;
+}
+
+/** How long a banner runs: "14 days", "1 day", or "12 hours" for less than a day. */
+export function lasts(start: number, end: number): string {
+  const hours = Math.round((end - start) / 3600);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"}`;
 }
 
 /** Local clock time, with the day if it isn't today: "19:00" or "Sun 19:00". */

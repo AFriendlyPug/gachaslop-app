@@ -31,8 +31,9 @@ export interface GameView {
 
 export interface PickView {
   name: string;
-  marks: string;
+  tags: string[]; // "Fest", "Limited", "Free pulls"
   iconPath: string | null;
+  engine: PickView | null; // a ZZZ agent's signature W-Engine
 }
 
 export interface RotationView {
@@ -48,7 +49,6 @@ export interface RotationView {
 export interface FeedView {
   key: string;
   name: string;
-  legend: string;
   credit: string;
   projected: boolean;
   enabled: boolean;
@@ -74,6 +74,16 @@ export interface Snapshot {
   missedSince: number | null;
   missed: Missed[];
   requestsThisMonth: number;
+}
+
+/** Kinds of test notification (Settings, Testing). */
+export type Sample = "reset" | "weekly" | "headsUp" | "bannerLive" | "bannerEnding" | "summary";
+
+export interface Diagnostics {
+  widget: { strips: number; trayShown: boolean; trayOnly: boolean };
+  remembered: number;
+  icons: number;
+  dataDir: string;
 }
 
 export interface GameInput {
@@ -108,6 +118,11 @@ export const api = {
     invoke<void>("update_game", { id, game, icon, clearIcon }),
   deleteGame: (id: string) => invoke<void>("delete_game", { id }),
   previewReset: (game: GameInput) => invoke<ResetPreview>("preview_reset", { game }),
+  testNotification: (sample: Sample) => invoke<string>("test_notification", { sample }),
+  replayCatchup: () => invoke<void>("replay_catchup"),
+  setTrayOnly: (on: boolean) => invoke<void>("set_tray_only", { on }),
+  diagnostics: () => invoke<Diagnostics>("diagnostics"),
+  openPath: (what: "data" | "log") => invoke<void>("open_path", { what }),
   hide: () => invoke<void>("hide_popup"),
   quit: () => invoke<void>("quit"),
 };

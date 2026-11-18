@@ -5,8 +5,29 @@
 //! window of the taskbar, repainted and re-placed once a second, recreated when Explorer restarts, and on
 //! Windows 10 the task buttons are narrowed so they never slide under it. When it can't be placed
 //! (vertical or auto-hide taskbar, no taskbar) the tray icon is shown instead.
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
 use crate::games::{ordered, Game};
 use crate::time::{fmt_clock, Ts};
+
+// For Settings' "Testing" section: how the widget is shown, and a switch to try the tray icon fallback.
+static STRIPS: AtomicUsize = AtomicUsize::new(0);
+static TRAY_SHOWN: AtomicBool = AtomicBool::new(false);
+static TRAY_ONLY: AtomicBool = AtomicBool::new(false);
+
+/// How the widget is shown right now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
+    pub strips: usize,     // taskbars with a strip
+    pub tray_shown: bool,  // the tray icon is in use
+    pub tray_only: bool,   // switched to the tray icon for testing (not saved)
+}
+
+pub fn status() -> Status {
+    Status { strips: STRIPS.load(Ordering::SeqCst), tray_shown: TRAY_SHOWN.load(Ordering::SeqCst),
+             tray_only: TRAY_ONLY.load(Ordering::SeqCst) }
+}
 
 /// The widget's lines: (short game name, time to its next reset) for the two soonest games.
 pub fn widget_lines(games: &[Game], now: Ts) -> Vec<(String, String)> {
@@ -26,6 +47,19 @@ pub fn label(name: &str) -> String {
         name.chars().filter(|c| c.is_alphanumeric()).take(3).collect()
     };
     short.to_uppercase()
+}
+
+/// How far apart the taskbar clock's time and date lines are at 100% scale (measured on Windows 10's
+/// 40px taskbar: their digits start 18px apart).
+pub const CLOCK_LINE_PITCH: i32 = 18;
+
+/// Where each of `count` lines (`line_h` tall) starts in a strip `height` tall: `pitch` apart like the
+/// clock's time and date, closer if the taskbar is too short for that, and centred as a block.
+pub fn line_tops(height: i32, line_h: i32, count: usize, pitch: i32) -> Vec<i32> {
+    let n = count as i32;
+    let pitch = if n > 1 { pitch.min((height - line_h) / (n - 1)).max(line_h) } else { 0 };
+    let top = (height - line_h - pitch * (n - 1).max(0)) / 2;
+    (0..n).map(|i| top + pitch * i).collect()
 }
 
 /// Left edge (in taskbar client pixels) for a strip `width` wide ending `gap` pixels before `edge`.
@@ -67,8 +101,17 @@ pub fn premultiply(bgra: &mut [u8], (r, g, b): (u8, u8, u8), background: [u8; 4]
 #[cfg(windows)]
 pub use win::{start, stop};
 
+/// Take the strips off every taskbar and show the tray icon instead, as when the taskbar auto-hides (or
+/// put them back). Until the app quits.
+pub fn set_tray_only(on: bool) {
+    TRAY_ONLY.store(on, Ordering::SeqCst);
+    #[cfg(windows)]
+    win::redraw();
+}
+
 #[cfg(not(windows))]
 pub fn start(app: &tauri::AppHandle) {
+    TRAY_SHOWN.store(true, Ordering::SeqCst);
     crate::tray::show_tray(app, true);
 }
 
@@ -80,7 +123,7 @@ mod win {
     use std::cell::RefCell;
     use std::ffi::c_void;
     use std::ptr::{null, null_mut};
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
     use std::sync::{Arc, OnceLock};
 
     use tauri::{AppHandle, Manager};
@@ -93,7 +136,8 @@ mod win {
     use windows_sys::Win32::UI::Shell::{SHAppBarMessage, ABM_GETSTATE, ABS_AUTOHIDE, APPBARDATA};
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-    use super::{background, premultiply, rebar_width, strip_left, text_colour, widget_lines};
+    use super::{background, line_tops, premultiply, rebar_width, strip_left, text_colour, widget_lines,
+                CLOCK_LINE_PITCH, STRIPS, TRAY_ONLY, TRAY_SHOWN};
     use crate::store::Store;
     use crate::time::now;
     use crate::tray::{self, Area};
@@ -139,6 +183,7 @@ mod win {
     }
     static APP: OnceLock<AppHandle> = OnceLock::new();
     static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+    static OWNER: AtomicUsize = AtomicUsize::new(0); // for redraw(), which may be called from any thread
 
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(Some(0)).collect()
@@ -175,6 +220,9 @@ mod win {
     /// Every taskbar the widget can sit on: the main one (with its notification area) and, on Windows 10,
     /// each other screen's. None when the taskbar auto-hides (a setting shared by all of them) or is vertical.
     fn taskbars() -> Vec<(HWND, Bar)> {
+        if TRAY_ONLY.load(Ordering::SeqCst) {
+            return vec![];
+        }
         let mut data: APPBARDATA = unsafe { std::mem::zeroed() };
         data.cbSize = size_of::<APPBARDATA>() as u32;
         if unsafe { SHAppBarMessage(ABM_GETSTATE, &mut data) } as u32 & ABS_AUTOHIDE != 0 {
@@ -294,6 +342,7 @@ mod win {
             TASKBAR_CREATED.store(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()), Ordering::SeqCst);
             SetTimer(owner, TIMER_ID, 1000, None);
             STATE.with_borrow_mut(|w| w.owner = owner as usize);
+            OWNER.store(owner as usize, Ordering::SeqCst);
         }
         tick();
     }
@@ -313,6 +362,15 @@ mod win {
             }
             *w = Widget::default();
         });
+        OWNER.store(0, Ordering::SeqCst);
+    }
+
+    /// Re-place and repaint the strips now rather than on the next tick.
+    pub fn redraw() {
+        let owner = hwnd(OWNER.load(Ordering::SeqCst));
+        if !owner.is_null() {
+            unsafe { PostMessageW(owner, REPAINT, 0, 0) };
+        }
     }
 
     /// Once a second: keep one strip on every usable taskbar (adding them for new screens, dropping them
@@ -326,6 +384,8 @@ mod win {
                 let alive = IsWindow(hwnd(s.wnd)) != 0 && GetParent(hwnd(s.wnd)) == hwnd(s.bar);
                 let wanted = bars.iter().any(|(bar, _)| *bar as usize == s.bar);
                 if alive && !wanted {
+                    let bar = hwnd(s.bar);
+                    fit_task_buttons(bar, s.kind, edge(bar, s.kind), true); // give the room back
                     DestroyWindow(hwnd(s.wnd));
                 }
                 alive && wanted
@@ -348,8 +408,10 @@ mod win {
                     main_shown |= strip.kind == Bar::Main;
                 }
             }
+            STRIPS.store(w.strips.len(), Ordering::SeqCst);
             !main_shown
         });
+        TRAY_SHOWN.store(show_tray, Ordering::SeqCst);
         STATE.with_borrow_mut(|w| {
             if w.tray_shown != Some(show_tray) {
                 w.tray_shown = Some(show_tray);
@@ -403,9 +465,8 @@ mod win {
                 let old_bitmap = SelectObject(dc, bitmap as HGDIOBJ);
                 SetBkMode(dc, TRANSPARENT as _);
                 SetTextColor(dc, 0x00FF_FFFF);
-                let top = (height - line_h * lines.len() as i32) / 2;
-                for (i, (label, time)) in lines.iter().enumerate() {
-                    let y = top + line_h * i as i32;
+                let tops = line_tops(height, line_h, lines.len(), px(CLOCK_LINE_PITCH));
+                for ((label, time), y) in lines.iter().zip(tops) {
                     let (l, t): (Vec<u16>, Vec<u16>) = (label.encode_utf16().collect(), time.encode_utf16().collect());
                     TextOutW(dc, pad, y, l.as_ptr(), l.len() as i32);
                     TextOutW(dc, width - pad - measure(time).cx, y, t.as_ptr(), t.len() as i32);

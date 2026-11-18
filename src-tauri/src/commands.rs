@@ -5,17 +5,19 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::autostart;
-use crate::banners::{data_runs_out, image_ext, is_image, write_atomic, FeedKind, Pick};
+use crate::banners::{data_runs_out, image_ext, is_image, mark_words, write_atomic, FeedKind, Pick};
 use crate::config::MAX_ICON_BYTES;
 use crate::games::{next_reset, next_weekly, CustomGame, Game, GameInput};
-use crate::scheduler::{due_events, seed};
+use crate::scheduler::{due_events, forget, sample_toast, seed, Sample};
 use crate::settings::{Missed, Paths, Settings};
 use crate::store::{Inner, Store};
 use crate::time::{now, now_millis, Ts};
+use crate::toast;
 use crate::tray::{self, DIALOG_OPEN};
+use crate::widget;
 
 type Store_<'a> = State<'a, Arc<Store>>;
 
@@ -34,8 +36,9 @@ pub struct GameView {
 #[serde(rename_all = "camelCase")]
 pub struct PickView {
     name: String,
-    marks: String,
+    tags: Vec<&'static str>, // "Fest", "Limited", "Free pulls"
     icon_path: Option<String>,
+    engine: Option<Box<PickView>>, // a ZZZ agent's W-Engine
 }
 
 #[derive(Serialize)]
@@ -55,7 +58,6 @@ pub struct RotationView {
 pub struct FeedView {
     key: &'static str,
     name: &'static str,
-    legend: &'static str,
     credit: &'static str,
     projected: bool,
     enabled: bool,
@@ -84,13 +86,18 @@ fn existing(path: &Path) -> Option<String> {
     path.exists().then(|| path.to_string_lossy().into_owned())
 }
 
+fn pick_view(icons: &Path, p: &Pick) -> PickView {
+    PickView {
+        name: p.name.clone(), tags: mark_words(&p.marks),
+        icon_path: p.icon.as_ref().and_then(|i| existing(&icons.join(&i.file))),
+        engine: p.engine.as_ref().map(|e| Box::new(pick_view(icons, e))),
+    }
+}
+
 fn snapshot(paths: &Paths, inner: &Inner) -> Snapshot {
     let now = now();
     let icons = paths.icons();
-    let pick = |p: &Pick| PickView {
-        name: p.name.clone(), marks: p.marks.clone(),
-        icon_path: p.icon.as_ref().and_then(|i| existing(&icons.join(&i.file))),
-    };
+    let pick = |p: &Pick| pick_view(&icons, p);
     let games = inner.games().into_iter().map(|g| GameView {
         icon_path: g.icon.as_ref().and_then(|f| existing(&paths.game_icons().join(f))),
         enabled: inner.settings.enabled(&g.key),
@@ -105,7 +112,7 @@ fn snapshot(paths: &Paths, inner: &Inner) -> Snapshot {
         let next_unknown_from = (!kind.upcoming_projected() && !rotations.iter().any(|r| r.start > now))
             .then(|| data_runs_out(kind, &feed.rotations, now)).flatten();
         FeedView {
-            key: kind.key(), name: kind.name(), legend: kind.legend(), credit: kind.credit(),
+            key: kind.key(), name: kind.name(), credit: kind.credit(),
             projected: kind.upcoming_projected(), enabled: enabled.contains(&kind),
             fetched_at: feed.fetched_at, checked_at: feed.checked_at, next_check: feed.next_check,
             last_error: feed.last_error.clone(), next_unknown_from,
@@ -346,4 +353,71 @@ pub fn hide_popup(app: AppHandle) {
 #[tauri::command]
 pub fn quit(app: AppHandle, store: Store_<'_>) {
     tray::quit(&app, &store);
+}
+
+// ---- Settings' "Testing" section --------------------------------------------------------------------
+/// Show a test notification card of this kind now. Returns what happened, for the popup to show.
+#[tauri::command]
+pub fn test_notification(app: AppHandle, store: Store_<'_>, sample: Sample) -> String {
+    let toast = {
+        let inner = store.lock();
+        sample_toast(sample, &inner.enabled_games(), &inner.feeds, now())
+    };
+    let Some(card) = toast else {
+        return match sample {
+            Sample::Weekly => "None of the switched-on games has a weekly reset.",
+            _ => "No live banner is stored for a switched-on game.",
+        }.into();
+    };
+    toast::show(&app, card);
+    "Shown beside this window.".into()
+}
+
+/// Show everything currently due again, as missed: its toasts (or a summary), the "While you were away"
+/// card and the red dot on the widget. Uses the real scheduler pass, so the notification settings apply.
+#[tauri::command]
+pub fn replay_catchup(store: Store_<'_>) {
+    let mut inner = store.lock();
+    let events = due_events(&inner.enabled_games(), &inner.feeds, inner.settings.headsup_minutes, now());
+    forget(&mut inner.state, &events);
+    inner.replay_catchup = true;
+    drop(inner);
+    store.wake();
+}
+
+#[tauri::command]
+pub fn set_tray_only(on: bool) {
+    widget::set_tray_only(on);
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Diagnostics {
+    widget: widget::Status,
+    remembered: usize, // notifications in the notified log
+    icons: usize,      // banner icons on disk
+    data_dir: String,
+}
+
+#[tauri::command]
+pub fn diagnostics(store: Store_<'_>) -> Diagnostics {
+    fn count(dir: &Path) -> usize {
+        std::fs::read_dir(dir).map_or(0, |entries| entries.flatten()
+            .map(|e| if e.path().is_dir() { count(&e.path()) } else { 1 }).sum())
+    }
+    Diagnostics {
+        widget: widget::status(), remembered: store.lock().state.notified.len(), icons: count(&store.paths.icons()),
+        data_dir: store.paths.root.to_string_lossy().into_owned(),
+    }
+}
+
+/// Open the data folder, or the log file in its usual program, with Explorer.
+#[tauri::command]
+pub fn open_path(app: AppHandle, store: Store_<'_>, what: String) -> Result<(), String> {
+    let path = match what.as_str() {
+        "data" => store.paths.root.clone(),
+        "log" => app.path().app_log_dir().map_err(|e| e.to_string())?.join("GachaSlop.log"),
+        _ => return Err("Unknown place.".into()),
+    };
+    std::process::Command::new("explorer.exe").arg(path).spawn().map(|_| ()).map_err(|e| e.to_string())
 }

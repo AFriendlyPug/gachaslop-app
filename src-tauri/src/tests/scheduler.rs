@@ -6,6 +6,7 @@ use crate::games::{built_in, CustomGame, Game};
 use crate::scheduler::*;
 use crate::settings::{Settings, State};
 use crate::store::Inner;
+use crate::toast::Card;
 use crate::time::{Ts, DAY, HOUR, MINUTE};
 
 fn keys(events: &[Event]) -> Vec<String> {
@@ -40,7 +41,7 @@ fn a_weekly_reset_days_ago_is_still_reported() {
     assert_eq!(weekly, [("ba", utc(2026, 11, 15, 19, 0)), ("zzz", utc(2026, 11, 16, 3, 0))]);
     let plan = plan(&new, &Settings::default(), utc(2026, 11, 19, 12, 0));
     assert_eq!(plan.toasts.len(), 1);
-    assert_eq!(plan.toasts[0].0, "While you were away");
+    assert_eq!(plan.toasts[0].title, "While you were away");
     assert_eq!(plan.missed.len(), 4);
 }
 
@@ -105,7 +106,8 @@ fn a_banner_found_by_the_startup_fetch_joins_the_catch_up_summary() {
         .filter(|e| !state.notified.contains_key(&e.key)).collect();
     let plan = plan(&new, &Settings::default(), opened);
     assert_eq!(plan.toasts.len(), 1);
-    let (title, body) = &plan.toasts[0];
+    let Card { game, title, body } = &plan.toasts[0];
+    assert_eq!(game, &None); // a summary shows the app's icon
     assert_eq!(title, "While you were away");
     assert!(body.contains("new BA banner (Nagusa)"), "{body}");
     // BA's weekly (Sunday) and daily (Monday) were at different times; ZZZ's Monday reset was both
@@ -136,8 +138,8 @@ fn daily_and_weekly_at_the_same_moment_are_one_toast() {
     let new = new_after(&zzz, &Feeds::default(), monday - MINUTE, monday);
     assert_eq!(new.len(), 2);
     let plan = plan(&new, &Settings::default(), monday - HOUR); // running at the time: not missed
-    assert_eq!(plan.toasts, [("Zenless Zone Zero (EU) daily and weekly reset".to_string(),
-                              "Daily and weekly reset just now. Next reset in 1d 0h.".to_string())]);
+    assert_eq!(plan.toasts, [Card::new(Some("zzz"), "Zenless Zone Zero (EU) daily and weekly reset",
+                                       "Daily and weekly reset just now. Next reset in 1d 0h.")]);
     assert!(plan.missed.is_empty());
 }
 
@@ -210,4 +212,61 @@ fn a_long_gap_between_passes_means_the_pc_slept() {
     assert!(!is_gap(now - 2 * MINUTE, now));
     assert!(is_gap(now - 3 * MINUTE, now));
     assert!(is_gap(now - 8 * HOUR, now));
+}
+
+// ---- Settings' "Testing" section ----
+fn live_zzz(now: Ts) -> Feeds {
+    let mut feeds = Feeds::default();
+    feeds.zzz.record(FeedKind::Zzz, Ok(vec![rotation(FeedKind::Zzz, now - DAY, now + 10 * DAY, "Severian")]), now);
+    feeds
+}
+
+#[test]
+fn test_toasts_use_the_real_text_and_say_they_are_tests() {
+    let now = utc(2026, 11, 18, 12, 0);
+    let feeds = live_zzz(now);
+    let toast = |s| sample_toast(s, &built_in(), &feeds, now).unwrap();
+    assert_eq!(toast(Sample::Reset),
+               Card::new(Some("ba"), "[Test] Blue Archive (Global) has reset", "Reset 17h 0m ago. Next reset in 7h 0m."));
+    assert_eq!(toast(Sample::Weekly).title, "[Test] Blue Archive (Global) weekly reset");
+    assert_eq!(toast(Sample::HeadsUp).body, "Time to finish your dailies.");
+    assert_eq!(toast(Sample::BannerLive),
+               Card::new(Some("zzz"), "[Test] New Zenless Zone Zero banner", "Severian\nEnds in 10d 0h."));
+    // as it will read a day before the banner ends
+    assert_eq!(toast(Sample::BannerEnding).body, "Severian\nEnds in 1d 0h.");
+    assert_eq!(toast(Sample::Summary).title, "[Test] While you were away");
+}
+
+#[test]
+fn test_banner_toasts_need_a_live_banner() {
+    let now = utc(2026, 11, 18, 12, 0);
+    assert_eq!(sample_toast(Sample::BannerLive, &built_in(), &Feeds::default(), now), None);
+    assert_eq!(sample_toast(Sample::BannerEnding, &built_in(), &Feeds::default(), now), None);
+    let ba_only: Vec<Game> = built_in().into_iter().filter(|g| g.key == "ba").collect();
+    assert_eq!(sample_toast(Sample::BannerLive, &ba_only, &live_zzz(now), now), None); // ZZZ switched off
+}
+
+#[test]
+fn replaying_catch_up_shows_what_is_due_again_as_missed() {
+    let now = utc(2026, 11, 18, 12, 0);
+    let (games, feeds) = (built_in(), live_zzz(now));
+    let events = due_events(&games, &feeds, 0, now);
+    let mut state = State::default();
+    seed(&mut state, &events);
+    forget(&mut state, &events);
+    let new: Vec<Event> = events.into_iter().filter(|e| !state.notified.contains_key(&e.key)).collect();
+    let plan = plan(&new, &Settings::default(), now); // the scheduler's pass after "Replay catch-up"
+    assert_eq!(plan.toasts[0].title, "While you were away");
+    assert_eq!(plan.missed.len(), new.len()); // two dailies, two weeklies and the banner, all missed
+}
+
+#[test]
+fn banner_marks_are_written_out_in_notifications() {
+    let now = utc(2026, 11, 18, 12, 0);
+    let mut rot = rotation(FeedKind::Ba, now - DAY, now + 5 * DAY, "Rio");
+    rot.picks[0].marks = "\u{1f31f} \u{1f381}".into();
+    let mut feeds = Feeds::default();
+    feeds.ba.record(FeedKind::Ba, Ok(vec![rot]), now);
+    let live = due_events(&built_in(), &feeds, 0, now).into_iter().find(|e| e.kind == Kind::BannerLive).unwrap();
+    assert_eq!(live.body, "Rio (Fest, Free pulls)\nEnds in 5d 0h.");
 }

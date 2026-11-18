@@ -1,17 +1,17 @@
-//! Scheduler: one thread that checks the banner feeds when due, shows toasts (including anything missed
-//! while the app was closed or the PC slept), and keeps the tray up to date.
+//! Scheduler: one thread that checks the banner feeds when due, shows notification cards (including
+//! anything missed while the app was closed or the PC slept), and keeps the tray up to date.
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter};
-use tauri_plugin_notification::NotificationExt;
 
-use crate::banners::{self, missing_icons, prune_icons, FeedKind, Feeds};
+use crate::banners::{self, mark_words, missing_icons, prune_icons, FeedKind, Feeds};
 use crate::config::{CATCHUP_AFTER, ENDING_WARNING, HEARTBEAT, MAX_MISSED, RESET_KEY_KEEP, SUMMARY_FROM, TICK, WAKE_GAP};
 use crate::games::{is_weekly_moment, last_reset, last_weekly, next_reset, Game};
 use crate::logs;
 use crate::settings::{Missed, Settings, State};
 use crate::store::{Inner, Store};
-use crate::time::{fmt_duration, now, Ts, MINUTE};
+use crate::time::{fmt_duration, now, Ts, DAY, MINUTE};
+use crate::toast::{self, Card};
 use crate::tray;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,8 +75,10 @@ pub fn due_events(games: &[Game], feeds: &Feeds, headsup_minutes: u32, now: Ts) 
         let Some(kind) = g.feed.as_deref().and_then(FeedKind::from_key) else { continue };
         let feed = feeds.get(kind);
         for rot in feed.rotations.iter().filter(|r| r.is_live(now)) {
-            let names = rot.picks.iter().map(|p| format!("{} {}", p.name, p.marks).trim().to_string())
-                .collect::<Vec<_>>().join(", ");
+            let names = rot.picks.iter().map(|p| match mark_words(&p.marks).as_slice() {
+                [] => p.name.clone(),
+                words => format!("{} ({})", p.name, words.join(", ")),
+            }).collect::<Vec<_>>().join(", ");
             let left = fmt_duration(rot.end - now);
             if feed.confirmed(rot) {
                 events.push(event(Kind::BannerLive, format!("banner-live:{}", rot.key), rot.start, rot.end,
@@ -102,13 +104,14 @@ pub fn seed(state: &mut State, events: &[Event]) {
 /// What to do with events that haven't been handled yet.
 #[derive(Debug, Default, PartialEq)]
 pub struct Plan {
-    pub toasts: Vec<(String, String)>,
+    pub toasts: Vec<Card>,
     pub missed: Vec<Missed>,
 }
 
 /// Turn new events into toasts. An event from before `running_since` (when the app last started or woke)
 /// happened while it wasn't running: it is "missed", and also goes on the "While you were away" card.
-/// A daily and weekly reset at the same moment become one toast; three or more toasts become one summary.
+/// A daily and weekly reset at the same moment become one toast; three or more become one summary card
+/// listing them a line each.
 pub fn plan(new: &[Event], settings: &Settings, running_since: Ts) -> Plan {
     let missed = |e: &Event| e.kind != Kind::HeadsUp && e.at < running_since - CATCHUP_AFTER;
     let wanted = |e: &Event| match e.kind {
@@ -131,9 +134,10 @@ pub fn plan(new: &[Event], settings: &Settings, running_since: Ts) -> Plan {
     }
     let toasts = if items.len() >= SUMMARY_FROM {
         let title = if items.iter().any(|(.., e)| missed(e)) { "While you were away" } else { "GachaSlop" };
-        vec![(title.to_string(), items.iter().map(|(_, _, s, _)| s.as_str()).collect::<Vec<_>>().join(", "))]
+        let lines: Vec<&str> = items.iter().map(|(_, _, s, _)| s.as_str()).collect();
+        vec![Card::new(None, title, toast::list(&lines))]
     } else {
-        items.iter().map(|(t, b, ..)| (t.clone(), b.clone())).collect()
+        items.iter().map(|(t, b, _, e)| Card::new(Some(&e.game), t.clone(), b.clone())).collect()
     };
     let missed = items.iter().filter(|(.., e)| missed(e))
         .map(|(_, _, summary, e)| Missed { at: e.at, game: e.game.clone(), text: summary.clone() }).collect();
@@ -174,6 +178,53 @@ pub fn feeds_to_check(inner: &Inner, now: Ts, manual: bool) -> Vec<FeedKind> {
 /// True if passes this far apart mean the PC slept (or the clock jumped) in between.
 pub fn is_gap(previous: Ts, now: Ts) -> bool {
     now - previous > WAKE_GAP
+}
+
+// ---- Settings' "Testing" section ------------------------------------------------------------------
+/// What a test notification can show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Sample {
+    Reset,
+    Weekly,
+    HeadsUp,
+    BannerLive,
+    BannerEnding,
+    Summary,
+}
+
+/// A test toast, made by the same code as the real ones from the switched-on games and stored banners,
+/// as if it were due now. None if nothing fits (no weekly reset, no live banner stored).
+pub fn sample_toast(sample: Sample, games: &[Game], feeds: &Feeds, now: Ts) -> Option<Card> {
+    let first = |events: Vec<Event>, kind| {
+        events.into_iter().find(|e| e.kind == kind).map(|e| Card::new(Some(&e.game), e.title, e.body))
+    };
+    let toast = match sample {
+        Sample::Reset => first(due_events(games, feeds, 0, now), Kind::Reset),
+        Sample::Weekly => first(due_events(games, feeds, 0, now), Kind::Weekly),
+        Sample::HeadsUp => first(due_events(games, feeds, (DAY / MINUTE) as u32, now), Kind::HeadsUp),
+        Sample::BannerLive => first(due_events(games, feeds, 0, now), Kind::BannerLive),
+        Sample::BannerEnding => {
+            // as it will read a day before the first live banner ends
+            let end = FeedKind::ALL.iter().flat_map(|k| &feeds.get(*k).rotations).filter(|r| r.is_live(now))
+                .map(|r| r.end).min()?;
+            first(due_events(games, feeds, 0, now.max(end - ENDING_WARNING)), Kind::BannerEnding)
+        }
+        Sample::Summary => {
+            // everything due now, as if it had all happened while the app was closed
+            let events = due_events(games, feeds, (DAY / MINUTE) as u32, now);
+            plan(&events, &Settings::default(), now + CATCHUP_AFTER + 1).toasts.into_iter().next()
+        }
+    };
+    toast.map(|card| Card { title: format!("[Test] {}", card.title), ..card })
+}
+
+/// Settings' "Replay catch-up": take these events out of the notified log, so the next pass treats them
+/// as new. The scheduler also treats them as missed (see Inner::replay_catchup).
+pub fn forget(state: &mut State, events: &[Event]) {
+    for e in events {
+        state.notified.remove(&e.key);
+    }
 }
 
 /// Fetch any feed that is due (or was asked for by "Refresh banners"), then its missing icons.
@@ -255,10 +306,8 @@ fn notify(app: &AppHandle, store: &Store, running_since: Ts, away_since: Option<
     }
     store.save_state(&inner);
     drop(inner);
-    for (title, body) in plan.toasts {
-        if let Err(err) = app.notification().builder().title(&title).body(&body).show() {
-            logs::warn(format!("Could not show a notification ({err})"));
-        }
+    for card in plan.toasts {
+        toast::show(app, card);
     }
     let _ = app.emit("state-changed", ());
 }
@@ -274,6 +323,9 @@ pub fn run(app: AppHandle, store: Arc<Store>) {
         if is_gap(last_pass, start) {
             // the PC slept (or the clock jumped): anything since the last pass was missed
             (running_since, away_since) = (start, Some(last_pass));
+        }
+        if std::mem::take(&mut store.lock().replay_catchup) {
+            (running_since, away_since) = (start, Some(start)); // as if the app had just started
         }
         last_pass = start;
         check_feeds(&app, &store); // first, so a banner it finds joins the same catch-up

@@ -15,11 +15,50 @@ fn zzz_groups_a_phase_into_one_rotation() {
     let r = &rots[0];
     assert_eq!(r.label(), "Severian, Norma");
     assert_eq!(r.details, ["A-rank agents: Nicole, Pulchra"]);
-    let extras: Vec<_> = r.extras.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(extras, ["Evil Caught Within", "The Genius's Follower"]);
+    assert_eq!(r.extras, vec![]); // both W-Engines found their agent
     assert_eq!(r.icons().count(), 4);
     assert!(r.icons().all(|i| i.file.starts_with("zzz/")));
     assert_eq!(r.picks[0].icon.as_ref().unwrap().file, "zzz/agent-1631.png");
+}
+
+#[test]
+fn zzz_agents_get_their_signature_w_engines() {
+    let r = &parse_zzz(&fixture("zzz_calendar.json")).unwrap()[0];
+    let pairs: Vec<_> = r.picks.iter().map(|p| (p.name.as_str(), p.engine.as_ref().map(|e| e.name.as_str()))).collect();
+    assert_eq!(pairs, [("Severian", Some("Evil Caught Within")), ("Norma", Some("The Genius's Follower"))]);
+    assert_eq!(r.picks[0].engine.as_ref().unwrap().icon.as_ref().unwrap().file, "zzz/wengine-14163.png");
+}
+
+fn named(name: &str, role: &str) -> (Pick, String) {
+    (Pick { name: name.into(), marks: String::new(), icon: None, engine: None }, role.into())
+}
+
+#[test]
+fn w_engines_pair_by_specialty_not_list_order() {
+    let agents = vec![named("Stunner", "Stun"), named("Hitter", "Attack")];
+    let engines = vec![named("Big Sword", "Attack"), named("Big Hammer", "Stun")];
+    let (agents, left) = pair_engines(agents, engines);
+    let engine = |i: usize| agents[i].engine.as_ref().map(|e| e.name.clone());
+    assert_eq!((engine(0), engine(1)), (Some("Big Hammer".into()), Some("Big Sword".into())));
+    assert_eq!(left, vec![]);
+}
+
+#[test]
+fn w_engines_without_a_matching_agent_are_left_over() {
+    let agents = vec![named("A", "Attack"), named("B", "Attack"), named("C", "")];
+    let engines = vec![named("First", "Attack"), named("Odd", "Defense"), named("Second", "Attack")];
+    let (agents, left) = pair_engines(agents, engines);
+    let names: Vec<_> = agents.iter().map(|a| a.engine.as_ref().map(|e| e.name.as_str())).collect();
+    assert_eq!(names, [Some("First"), Some("Second"), None]); // same specialty: list order; none: no guess
+    assert_eq!(left.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Odd"]);
+}
+
+#[test]
+fn stored_banners_from_before_w_engine_pairing_still_load() {
+    let old = r#"{"name":"Severian","marks":"","icon":null}"#;
+    let pick: Pick = serde_json::from_str(old).unwrap();
+    assert_eq!(pick.engine, None);
+    assert!(!serde_json::to_string(&pick).unwrap().contains("engine")); // and nothing extra is saved
 }
 
 #[test]

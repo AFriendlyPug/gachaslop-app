@@ -1,4 +1,7 @@
-//! Constants the rest of the app shares: data source URLs, timings (in seconds) and limits. No side effects.
+//! Constants the rest of the app shares: data source URLs, timings (in seconds unless a Duration) and limits.
+//! No side effects.
+use std::time::Duration;
+
 use crate::time::{DAY, HOUR, MINUTE};
 
 /// Unofficial Blue Archive Global banner list: current banners, plus future ones projected from JP.
@@ -38,6 +41,18 @@ pub const TICK: i64 = 30;
 pub const WAKE_GAP: i64 = TICK + 90;
 /// How often `last_seen` is saved while running.
 pub const HEARTBEAT: i64 = 5 * MINUTE;
+
+/// Notification cards (toast.rs): on screen for TOAST_BASE plus TOAST_PER_LINE for each line of text, up
+/// to TOAST_MAX; after the mouse leaves one, it stays TOAST_AFTER_HOVER longer.
+pub const TOAST_BASE: Duration = Duration::from_secs(6);
+pub const TOAST_PER_LINE: Duration = Duration::from_millis(1500);
+pub const TOAST_MAX: Duration = Duration::from_secs(12);
+pub const TOAST_AFTER_HOVER: Duration = Duration::from_secs(3);
+pub const TOAST_FADE_IN: Duration = Duration::from_millis(180);
+pub const TOAST_FADE_OUT: Duration = Duration::from_millis(260);
+/// A card listing several things (a summary, or cards that waited behind a full-screen game) shows this
+/// many lines at most.
+pub const TOAST_MERGED_LINES: usize = 4;
 
 /// Custom game icons: largest file accepted.
 pub const MAX_ICON_BYTES: usize = 1_000_000;

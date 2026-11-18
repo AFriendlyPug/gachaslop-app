@@ -163,6 +163,21 @@ pub fn show_tray(app: &AppHandle, visible: bool) {
     }
 }
 
+/// What the popup opens above (the widget or tray icon last clicked), if known.
+pub fn anchor() -> Option<Area> {
+    *ANCHOR.lock().unwrap()
+}
+
+/// Where the popup is while it's open, in physical screen pixels.
+pub fn popup_area(app: &AppHandle) -> Option<Area> {
+    let window = app.get_webview_window(POPUP)?;
+    if !window.is_visible().unwrap_or(false) {
+        return None;
+    }
+    let (at, size) = (window.outer_position().ok()?, window.outer_size().ok()?);
+    Some(Area { x: at.x, y: at.y, w: size.width as i32, h: size.height as i32 })
+}
+
 /// Set what the popup opens above, in physical screen pixels.
 pub fn set_anchor(area: Area) {
     *ANCHOR.lock().unwrap() = Some(area);

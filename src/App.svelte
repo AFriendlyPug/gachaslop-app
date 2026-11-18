@@ -46,45 +46,53 @@
   const feedFor = (game: GameView) => snap?.feeds.find((f) => f.key === game.feed) ?? null;
   const MISSED_SHOWN = 3; // keep the card short so the games still fit
   const gameName = (key: string) => snap?.games.find((g) => g.key === key)?.short ?? key;
+  const title = $derived(view.name === "home" ? "GachaSlop" : view.name === "settings" ? "Settings"
+    : view.game ? "Edit game" : "Add a game");
 </script>
 
 <main class="panel">
-  <header>
+  <header class="bar">
+    {#if view.name !== "home"}
+      <button class="back" onclick={() => (view = view.name === "edit" ? { name: "settings" } : { name: "home" })}>
+        ‹ {view.name === "edit" ? "Settings" : "Back"}
+      </button>
+    {/if}
+    <h1>{title}</h1>
     {#if view.name === "home"}
-      <h1>GachaSlop</h1>
+      {#if snap?.settings.offline}<span class="pill warn" title="No network requests are made">Offline</span>{/if}
       <div class="actions">
         <button class="icon" title="Refresh banners" aria-label="Refresh banners"
                 disabled={snap?.settings.offline} onclick={refresh}>⟳</button>
         <button class="icon" title="Settings" aria-label="Settings" onclick={() => (view = { name: "settings" })}>⚙</button>
-        <button class="icon" title="Hide" aria-label="Hide" onclick={() => api.hide()}>✕</button>
+        <button class="icon" title="Close (Esc)" aria-label="Close" onclick={() => api.hide()}>✕</button>
       </div>
-    {:else}
-      <button class="back" onclick={() => (view = view.name === "edit" ? { name: "settings" } : { name: "home" })}>
-        ‹ {view.name === "edit" ? "Settings" : "Back"}
-      </button>
-      <h1>{view.name === "settings" ? "Settings" : view.game ? "Edit game" : "Add a game"}</h1>
     {/if}
   </header>
 
-  {#if message}<p class="toast-line">{message}</p>{/if}
+  {#if message}<p class="status-line" role="status">{message}</p>{/if}
 
   <div class="body">
     {#if !snap}
       <p class="muted">Loading…</p>
     {:else if view.name === "home"}
       {#if snap.missed.length}
-        <section class="card missed">
+        <section class="card notice" aria-label="Missed while you were away">
           <div class="row">
-            <h2>While you were away{snap.missedSince ? ` (since ${localDate(snap.missedSince)})` : ""}</h2>
+            <h2>While you were away</h2>
             <button class="link" onclick={() => api.dismissMissed()}>Dismiss</button>
           </div>
+          {#if snap.missedSince}<p class="small muted">Since {localDate(snap.missedSince)}</p>{/if}
           <ul>
             {#each snap.missed.slice(-MISSED_SHOWN).reverse() as m (m.at + m.text)}
-              <li><span class="tag">{gameName(m.game)}</span> {m.text} <span class="muted">{ago(m.at, now)}</span></li>
+              <li>
+                <span class="pill">{gameName(m.game)}</span>
+                <span class="grow">{m.text}</span>
+                <span class="muted tiny">{ago(m.at, now)}</span>
+              </li>
             {/each}
           </ul>
           {#if snap.missed.length > MISSED_SHOWN}
-            <p class="muted small">and {snap.missed.length - MISSED_SHOWN} more</p>
+            <p class="small muted">and {snap.missed.length - MISSED_SHOWN} more</p>
           {/if}
         </section>
       {/if}

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A personal Windows app (Tauri 2: Rust core + a small WebView2 popup in Svelte 5) that counts down to game resets and shows current and upcoming banners for Blue Archive (Global) and Zenless Zone Zero (EU). It draws a small strip on every screen's taskbar, just left of the clock (`BA 02:15:07` / `ZZZ 10:15:07`); clicking it opens the popup, right-clicking shows the menu. It sends Windows notifications for resets, heads-ups, new banners and banners ending, and catches up on anything missed while it was closed. Users can add their own games (icon, name, UTC reset time), which get resets but never banners. See [README.md](README.md) for features, data sources and where files are kept.
+A personal Windows app (Tauri 2: Rust core + a small WebView2 popup in Svelte 5) that counts down to game resets and shows current and upcoming banners for Blue Archive (Global) and Zenless Zone Zero (EU). It draws a small strip on every screen's taskbar, just left of the clock (`BA 02:15:07` / `ZZZ 10:15:07`); clicking it opens the popup, right-clicking shows the menu. It shows its own notification cards (not Windows notifications) for resets, heads-ups, new banners and banners ending, and catches up on anything missed while it was closed. Users can add their own games (icon, name, UTC reset time), which get resets but never banners. See [README.md](README.md) for features, data sources and where files are kept.
 
 It has **nothing to do with Discord**. The GachaSlop Discord bot (`E:\Github\GachaSlop`) was only the reference for the reset maths and the banner parsers; nothing is imported from or connected to it.
 
@@ -43,14 +43,17 @@ GitHub builds only on version tags (a Release with the installer) or the "Run wo
 - `instance.rs`: one copy at a time via a local port (47613).
 - `tray.rs`: popup show/hide/placement (`place()`), shared menu actions (`menu_action`), and the tray icon, which is only shown when the taskbar widget can't be.
 - `widget.rs`: the taskbar strips (one per taskbar) drawn with Win32 (`windows-sys`).
-- `scheduler.rs`: one thread: fetch due feeds, work out due events, show toasts and catch-up, keep the tray in sync.
+- `toast.rs`: the notification cards, a layered top-level window drawn with GDI (text) and GDI+ (icons). `show()` works from any thread.
+- `scheduler.rs`: one thread: fetch due feeds, work out due events, show cards and catch-up, keep the tray in sync.
 - `commands.rs`: the commands the popup calls, and the `Snapshot` it renders.
 
 Tests live in `src-tauri/src/tests/` (inside the crate so they can reach private modules; a top-level `src-tauri/tests/` would be compiled as integration tests and couldn't). Sample API responses are in `src-tauri/fixtures/`.
 
 ### Popup (`src/`)
 
-`App.svelte` (home, settings and editor views; ticks `now` every second while visible), `components/GameCard.svelte` (one card per enabled game: countdowns plus that game's banners, upcoming in a `<details>` dropdown), `GameBadge.svelte`, `GameEditor.svelte` (add/edit custom games; picks images with a plain `<input type="file">` and sends the bytes as a raw invoke body), `Settings.svelte`. `lib/api.ts` has typed `invoke()` wrappers; `lib/time.ts` turns UTC seconds into local time and countdowns. Built-in game icons are `public/games/{ba,zzz}.png`.
+`App.svelte` (home, settings and editor views; ticks `now` every second while visible), `components/GameCard.svelte` (one card per enabled game: countdowns plus that game's banners; upcoming banners are a `<details>` dropdown that previews the next one when closed and opens into a timeline, sharing the `picks` snippet with the current banner), `GameBadge.svelte`, `GameEditor.svelte` (add/edit custom games; picks images with a plain `<input type="file">` and sends the bytes as a raw invoke body), `Settings.svelte` (ends with a collapsed "Testing" section: test cards via `scheduler::sample_toast`, "Replay catch-up" via `Inner::replay_catchup`, a tray-only switch via `widget::set_tray_only`, and `diagnostics`). `lib/api.ts` has typed `invoke()` wrappers; `lib/time.ts` turns UTC seconds into local time and countdowns. Built-in game icons are `public/games/{ba,zzz}.png` (also compiled into `toast.rs` for the cards).
+
+Designed for readability: 14px text and never under 12px, colour pairs at 4.5:1 contrast or better (tokens at the top of `app.css`, mirrored by `toast.rs`'s `LIGHT`/`DARK`), sentence-case labels next to every number ("Daily reset · 19:00", "Ends in"), tabular digits for countdowns, and words rather than emoji (`mark_words` turns BA's marks into "Fest", "Limited", "Free pulls"). The popup is 400x660 and both built-in games should fit without scrolling.
 
 ### Times
 
@@ -60,13 +63,15 @@ Everything is UTC (`Ts`, Unix seconds) in Rust, in saved files and over IPC. The
 
 Banners are stored in `banners.json` and fetched only when the stored data runs out, never on a timer, at startup, on wake or on opening the popup:
 - BA (`ba.joexyz.online`): future banners are projections from the JP schedule, so the feed is checked as each stored upcoming banner is due to start, and a "banner live" toast only fires once a fetch made after its start still lists it (`FeedState::confirmed`).
-- ZZZ (`api.ennead.cc`): lists only the current phase, so it's checked when that phase ends.
+- ZZZ (`api.ennead.cc`): lists only the current phase, so it's checked when that phase ends. Each S-rank agent gets the S-rank W-Engine of the same specialty (`pair_engines`, stored as `Pick::engine`); any left over stay in `Rotation::extras`.
 - Nothing new or a failure: back off 30 min, 2 h, 6 h, then every 12 h. Manual refresh is skipped if fetched under 5 minutes ago. Offline mode makes no requests at all.
 - Icons are downloaded once for current and upcoming banners and deleted when no stored banner uses them.
 
 ### Notifications and catch-up
 
-`due_events` lists every currently due event (latest daily and weekly reset, heads-up, banner live, banner ending); the notified-keys log in `state.json` decides what's new. There is no catch-up time window: anything missed while the app was closed or the PC slept is shown on load (several days of missed dailies collapse into one), three or more become one summary, and missed items go on the "While you were away" card plus a red dot on the widget. First run, and adding or switching on a game, seed the log so no stale toasts fire.
+`due_events` lists every currently due event (latest daily and weekly reset, heads-up, banner live, banner ending); the notified-keys log in `state.json` decides what's new. There is no catch-up time window: anything missed while the app was closed or the PC slept is shown on load (several days of missed dailies collapse into one), three or more become one summary card listing them a line each, and missed items go on the "While you were away" card plus a red dot on the widget. First run, and adding or switching on a game, seed the log so no stale cards appear.
+
+Cards (`toast.rs`) go above the main taskbar's widget, or beside the popup when it's open (`position()`), and wait while `SHQueryUserNotificationState` reports a full-screen app, presentation or locked screen (`is_busy`); cards that arrive together or while waiting become one (`merge`). Its window procedure, like the widget's, only uses `try_borrow` on its thread-local state.
 
 ### Taskbar widget (`widget.rs`)
 
@@ -82,7 +87,7 @@ Tauri runs commands, tray events and the widget's window procedure on the main t
 
 ## Conventions
 
-- **Keep packages to a minimum.** Rust uses only `tauri`, `tauri-plugin-notification`, `serde`, `serde_json` and `windows-sys` (already built by Tauri). Before adding a crate or npm package, check whether std, an existing dependency, a Windows tool, or a little own code can do it, and say why if not.
+- **Keep packages to a minimum.** Rust uses only `tauri`, `serde`, `serde_json` and `windows-sys` (already built by Tauri). Notifications are the app's own cards: don't bring back Windows notifications or a notification plugin. Before adding a crate or npm package, check whether std, an existing dependency, a Windows tool, or a little own code can do it, and say why if not.
 - **Offline first:** anything fetched is stored and used from disk; give every cached file a clean-up rule.
 - **Built-in games are only BA and ZZZ;** custom games never get banners or cause network requests.
 - British English in user-facing text and docs; no em dashes in user-facing strings (use `·`, commas or full stops).

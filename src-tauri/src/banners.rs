@@ -46,14 +46,6 @@ impl FeedKind {
         }
     }
 
-    /// Explains the marks after names ('' if there are none).
-    pub fn legend(self) -> &'static str {
-        match self {
-            FeedKind::Ba => "⏳ Limited · 🌟 Fest · 🎁 Free pulls",
-            FeedKind::Zzz => "",
-        }
-    }
-
     pub fn credit(self) -> &'static str {
         match self {
             FeedKind::Ba => "Data: ba.joexyz.online · Icons: SchaleDB (both unofficial)",
@@ -87,6 +79,9 @@ pub struct Pick {
     pub name: String,
     pub marks: String, // e.g. "🌟 🎁" ('' for none)
     pub icon: Option<Icon>,
+    /// A ZZZ agent's signature W-Engine, on the same phase's W-Engine banner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<Box<Pick>>,
 }
 
 /// One banner period: every pickup that shares the same start and end (UTC).
@@ -95,8 +90,8 @@ pub struct Rotation {
     pub key: String,
     pub start: Ts,
     pub end: Ts,
-    pub picks: Vec<Pick>,    // the featured characters
-    pub extras: Vec<Pick>,   // featured W-Engines shown alongside ZZZ agents
+    pub picks: Vec<Pick>,    // the featured characters (with their W-Engines, for ZZZ)
+    pub extras: Vec<Pick>,   // featured W-Engines no agent was paired with
     pub details: Vec<String>,
 }
 
@@ -115,7 +110,8 @@ impl Rotation {
     }
 
     pub fn icons(&self) -> impl Iterator<Item = &Icon> {
-        self.picks.iter().chain(&self.extras).filter_map(|p| p.icon.as_ref())
+        self.picks.iter().chain(&self.extras)
+            .flat_map(|p| p.icon.iter().chain(p.engine.as_ref().and_then(|e| e.icon.as_ref())))
     }
 }
 
@@ -265,11 +261,22 @@ pub fn parse_ba(payload: &Value) -> Result<Vec<Rotation>, String> {
                 name: text(student, "name")?.to_string(),
                 marks: marks.join(" "),
                 icon: student["schaleDbId"].as_u64().map(ba_icon),
+                engine: None,
             });
         }
     }
     Ok(groups.into_iter().map(|((start, end), picks)| Rotation::new(FeedKind::Ba, start, end, picks, vec![], vec![]))
         .collect())
+}
+
+/// A pick's marks in words: "🌟 🎁" is ["Fest", "Free pulls"]. The popup shows them as tags.
+pub fn mark_words(marks: &str) -> Vec<&'static str> {
+    marks.split_whitespace().filter_map(|m| match m {
+        "🌟" => Some("Fest"),
+        "⏳" => Some("Limited"),
+        "🎁" => Some("Free pulls"),
+        _ => None,
+    }).collect()
 }
 
 fn zzz_pick(kind: &str, item: &Value) -> Option<Pick> {
@@ -279,11 +286,25 @@ fn zzz_pick(kind: &str, item: &Value) -> Option<Pick> {
         let suffix = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("png");
         Icon { file: format!("zzz/{kind}-{}.{suffix}", item["id"]), url: url.to_string() }
     });
-    Some(Pick { name, marks: String::new(), icon })
+    Some(Pick { name, marks: String::new(), icon, engine: None })
+}
+
+/// Give each agent its signature W-Engine: the featured one of the same specialty (the API's
+/// "profession"; a signature W-Engine always shares its agent's), in list order when two agents share one.
+/// Takes (pick, specialty) pairs; returns the agents and any W-Engines left over.
+pub fn pair_engines(agents: Vec<(Pick, String)>, engines: Vec<(Pick, String)>) -> (Vec<Pick>, Vec<Pick>) {
+    let mut left: Vec<Option<(Pick, String)>> = engines.into_iter().map(Some).collect();
+    let agents = agents.into_iter().map(|(mut agent, role)| {
+        let same = left.iter_mut().find(|e| e.as_ref().is_some_and(|(_, r)| !role.is_empty() && *r == role));
+        agent.engine = same.and_then(Option::take).map(|(engine, _)| Box::new(engine));
+        agent
+    }).collect();
+    (agents, left.into_iter().flatten().map(|(engine, _)| engine).collect())
 }
 
 /// The calendar has one entry per banner type (agents, W-Engines) in each phase: group them by start and
-/// end. A rotation's picks are its S-rank agents (or S-rank W-Engines if it has none); A-ranks go in details.
+/// end. A rotation's picks are its S-rank agents, each with its S-rank W-Engine (or the S-rank W-Engines if
+/// it has no agents); A-rank agents go in details.
 pub fn parse_zzz(payload: &Value) -> Result<Vec<Rotation>, String> {
     let banners = payload["banners"].as_array().ok_or("missing banners list")?;
     let shift = ZZZ_CALENDAR_UTC_OFFSET - ZZZ_EU_UTC_OFFSET; // same local time on the EU server
@@ -297,11 +318,19 @@ pub fn parse_zzz(payload: &Value) -> Result<Vec<Rotation>, String> {
         engines.extend(banner["w_engines"].as_array().cloned().unwrap_or_default());
     }
     let is_s = |v: &&Value| v["rarity"].as_str() == Some("S");
+    let top = |list: &[Value], kind| -> Vec<(Pick, String)> {
+        list.iter().filter(is_s)
+            .filter_map(|v| Some((zzz_pick(kind, v)?, v["profession"].as_str().unwrap_or_default().to_string())))
+            .collect()
+    };
     let mut rotations = Vec::new();
     for ((start, end), (agents, engines)) in groups {
-        let top_agents: Vec<_> = agents.iter().filter(is_s).filter_map(|a| zzz_pick("agent", a)).collect();
-        let top_engines: Vec<_> = engines.iter().filter(is_s).filter_map(|w| zzz_pick("wengine", w)).collect();
-        let (picks, extras) = if top_agents.is_empty() { (top_engines, vec![]) } else { (top_agents, top_engines) };
+        let (top_agents, top_engines) = (top(&agents, "agent"), top(&engines, "wengine"));
+        let (picks, extras) = if top_agents.is_empty() {
+            (top_engines.into_iter().map(|(engine, _)| engine).collect(), vec![])
+        } else {
+            pair_engines(top_agents, top_engines)
+        };
         if picks.is_empty() {
             continue;
         }
