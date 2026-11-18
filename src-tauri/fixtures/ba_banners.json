@@ -1,0 +1,9 @@
+{"data": [
+  {"startDate": "2026-11-17T02:00:00Z", "endDate": "2026-11-24T01:59:59Z", "freePulls": false,
+   "pickupStudents": [{"name": "Rio", "isFestGlobal": true, "schaleDbId": 20041},
+                      {"name": "Iroha (Swimsuit)", "isLimitedGlobal": true, "schaleDbId": 10148}]},
+  {"startDate": "2026-11-17T02:00:00Z", "endDate": "2026-11-24T01:59:59Z", "freePulls": true,
+   "pickupStudents": [{"name": "Neru (School)", "schaleDbId": 10111}]},
+  {"startDate": "2026-11-24T02:00:00Z", "endDate": "2026-12-08T01:59:59Z",
+   "pickupStudents": [{"name": "Nagusa", "schaleDbId": 10119}, {"name": "No Icon Student"}]}
+]}

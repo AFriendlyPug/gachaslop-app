@@ -1,0 +1,50 @@
+# Builds the Windows installer on GitHub.
+# - Push a version tag (e.g. `git tag v0.1.0; git push origin v0.1.0`): builds and publishes a GitHub Release
+#   with the installer and the plain .exe attached.
+# - "Run workflow" in the Actions tab: a test build; the files are attached to the run as artifacts.
+# Ordinary pushes don't build, to save Actions minutes.
+name: Build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # to create the release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - name: Tests
+        run: |
+          npm test
+          npm run check
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # a release only for tag pushes; a manual run just builds
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('GachaSlop {0}', github.ref_name) || '' }}
+          generateReleaseNotes: true
+          uploadPlainBinary: true
+          uploadWorkflowArtifacts: ${{ github.ref_type != 'tag' }}

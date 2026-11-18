@@ -1,0 +1,21 @@
+# Dependencies and build output
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Vite
+*.local
+vite.config.ts.timestamp-*
+
+# Logs and leftovers (the app's own data lives in %APPDATA%, not here)
+*.log
+*.bad
+*.tmp
+
+# Editors and operating systems (.vscode/ is kept: it holds the recommended extensions)
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

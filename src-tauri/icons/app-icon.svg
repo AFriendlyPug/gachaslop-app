@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- A reset clock with a gacha sparkle -->
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="#6a3df0"/>
+  <circle cx="480" cy="560" r="330" fill="#ffffff"/>
+  <circle cx="480" cy="560" r="330" fill="none" stroke="#2b2140" stroke-width="40"/>
+  <path d="M480 560V340M480 560l150 110" stroke="#2b2140" stroke-width="64" stroke-linecap="round" fill="none"/>
+  <circle cx="480" cy="560" r="42" fill="#2b2140"/>
+  <path d="M800 90l38 112 112 38-112 38-38 112-38-112-112-38 112-38z" fill="#ffd34d"/>
+</svg>
