@@ -85,3 +85,33 @@ fn the_notifications_list_is_kept_for_a_month_and_capped() {
     assert_eq!(many.len(), 200);
     assert_eq!(many[0].added, now - 200); // the oldest went first
 }
+
+#[test]
+fn new_settings_have_sensible_defaults_and_old_files_get_them() {
+    let s = Settings::default();
+    assert!(!s.tray_icon && s.free_memory && s.update_checks);
+    assert!(!s.hotkey_on); // the keyboard shortcut is off until turned on...
+    assert_eq!(s.active_hotkey(), "");
+    assert_eq!(s.hotkey, "Ctrl+Alt+G"); // ...and then this is the one used
+    let on = Settings { hotkey_on: true, ..Settings::default() };
+    assert_eq!(on.active_hotkey(), "Ctrl+Alt+G");
+    assert_eq!(s.alerts("ba"), Alerts::default()); // a game not listed gets everything
+    let old: Settings = serde_json::from_str(r#"{"offline": true}"#).unwrap();
+    assert_eq!((old.hotkey_on, old.free_memory, old.tray_icon), (false, true, false));
+}
+
+#[test]
+fn settings_are_tidied_before_saving() {
+    let mut s = Settings { hotkey: "  Ctrl+Alt+K ".into(), ..Settings::default() };
+    s.game_alerts.insert("ba".into(), Alerts::default()); // same as the default: not worth saving
+    s.game_alerts.insert("zzz".into(), Alerts { banners: false, ..Alerts::default() });
+    let s = s.validated();
+    assert_eq!(s.hotkey, "Ctrl+Alt+K");
+    assert_eq!(s.game_alerts.keys().collect::<Vec<_>>(), ["zzz"]);
+}
+
+#[test]
+fn settings_from_the_short_lived_custom_height_still_load() {
+    let old: Settings = serde_json::from_str(r#"{"popupHeight": 700, "offline": true}"#).unwrap();
+    assert!(old.offline); // the old field is simply ignored
+}

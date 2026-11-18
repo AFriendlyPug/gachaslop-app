@@ -372,10 +372,10 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-/// Icons stored banners use that aren't on disk yet.
-pub fn missing_icons(feeds: &Feeds, dir: &Path) -> Vec<Icon> {
+/// Icons that stored banners of these feeds use and that aren't on disk yet.
+pub fn missing_icons(feeds: &Feeds, kinds: &[FeedKind], dir: &Path) -> Vec<Icon> {
     let mut seen = HashSet::new();
-    FeedKind::ALL.iter().flat_map(|k| &feeds.get(*k).rotations).flat_map(|r| r.icons())
+    kinds.iter().flat_map(|k| &feeds.get(*k).rotations).flat_map(|r| r.icons())
         .filter(|i| seen.insert(i.file.clone()) && !dir.join(&i.file).exists()).cloned().collect()
 }
 

@@ -8,7 +8,7 @@ fn game(key: &str) -> Game {
 }
 
 fn custom(hour: u32, minute: u32, weekly_day: Option<u32>) -> Game {
-    CustomGame { id: "custom-1".into(), name: "Test".into(), icon: None, hour, minute, weekly_day, offset_minutes: 0 }
+    CustomGame { id: "custom-1".into(), name: "Test".into(), icon: None, hour, minute, weekly_day, zone: None, offset_minutes: 0 }
         .to_game()
 }
 
@@ -85,7 +85,7 @@ fn ordered_soonest_first() {
 #[test]
 fn old_games_saved_with_a_server_offset_move_to_utc() {
     let old = |hour, minute, offset_minutes, weekly_day| CustomGame {
-        id: "custom-1".into(), name: "Old".into(), icon: None, hour, minute, weekly_day, offset_minutes,
+        id: "custom-1".into(), name: "Old".into(), icon: None, hour, minute, weekly_day, zone: None, offset_minutes,
     }.in_utc();
     // 04:00 UTC-7 is 11:00 UTC, same day
     let g = old(4, 0, -420, Some(0));
@@ -98,13 +98,13 @@ fn old_games_saved_with_a_server_offset_move_to_utc() {
     assert_eq!((g.hour, g.minute, g.weekly_day), (4, 0, Some(0)));
     // already UTC: unchanged
     assert_eq!(old(4, 0, 0, None), CustomGame { id: "custom-1".into(), name: "Old".into(), icon: None, hour: 4,
-                                                minute: 0, weekly_day: None, offset_minutes: 0 });
+                                                minute: 0, weekly_day: None, zone: None, offset_minutes: 0 });
 }
 
 #[test]
 fn games_json_round_trip_and_old_format() {
     let games = vec![CustomGame { id: "custom-1".into(), name: "Arknights".into(), icon: Some("custom-1-5.png".into()),
-                                  hour: 20, minute: 0, weekly_day: Some(0), offset_minutes: 0 }];
+                                  hour: 20, minute: 0, weekly_day: Some(0), zone: None, offset_minutes: 0 }];
     let json = serde_json::to_string(&games).unwrap();
     assert!(!json.contains("offsetMinutes"));
     assert_eq!(serde_json::from_str::<Vec<CustomGame>>(&json).unwrap(), games);
@@ -115,7 +115,7 @@ fn games_json_round_trip_and_old_format() {
 
 #[test]
 fn input_validation() {
-    let ok = GameInput { name: "  Arknights ".into(), hour: 20, minute: 0, weekly_day: Some(0) };
+    let ok = GameInput { name: "  Arknights ".into(), hour: 20, minute: 0, weekly_day: Some(0), zone: None };
     assert_eq!(ok.validated().unwrap().name, "Arknights");
     assert!(GameInput { name: " ".into(), ..ok.clone() }.validated().is_err());
     assert!(GameInput { name: "x".repeat(41), ..ok.clone() }.validated().is_err());

@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::autostart;
 use crate::banners::{data_runs_out, image_ext, is_image, mark_words, write_atomic, FeedKind, Pick};
-use crate::config::{MAX_ICON_BYTES, RELEASES_PAGE};
+use crate::config::{MAX_ICON_BYTES, MAX_ICON_DOWNLOAD_BYTES, RELEASES_PAGE};
 use crate::games::{next_reset, next_weekly, CustomGame, Game, GameInput};
 use crate::logs;
 use crate::scheduler::{self, due_events, forget, sample_toast, seed, Sample};
@@ -18,10 +18,14 @@ use crate::store::{Inner, Store};
 use crate::time::{now, now_millis, Ts};
 use crate::toast;
 use crate::tray::{self, DIALOG_OPEN};
-use crate::update::{self, is_newer, Release, CURRENT};
+use crate::update::{self, current, is_newer, Release};
 use crate::widget;
+use crate::zones;
 
 type Store_<'a> = State<'a, Arc<Store>>;
+
+/// Why the saved keyboard shortcut couldn't be set at startup (another app has it), for Settings to show.
+pub static HOTKEY_PROBLEM: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +36,7 @@ pub struct GameView {
     enabled: bool,
     next_reset: Ts,
     next_weekly: Option<Ts>,
+    zone_name: Option<String>, // the time zone's name as Windows shows it, if the game has one
 }
 
 #[derive(Serialize)]
@@ -92,6 +97,7 @@ pub struct UpdateView {
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     version: &'static str,
+    hotkey_problem: Option<String>,
     update: Option<UpdateView>,
     update_checked: Option<Ts>,
     now: Ts,
@@ -101,6 +107,12 @@ pub struct Snapshot {
     notices: Vec<NoticeView>, // newest first
     new_notices: usize,
     requests_this_month: u32,
+}
+
+/// A time zone's display name, from the list Windows gives (looked up once).
+fn zone_name(id: &str) -> String {
+    static ZONES: std::sync::OnceLock<Vec<zones::Zone>> = std::sync::OnceLock::new();
+    ZONES.get_or_init(zones::list).iter().find(|z| z.id == id).map_or(id.to_string(), |z| z.name.clone())
 }
 
 fn existing(path: &Path) -> Option<String> {
@@ -124,6 +136,7 @@ fn snapshot(paths: &Paths, inner: &Inner) -> Snapshot {
         enabled: inner.settings.enabled(&g.key),
         next_reset: next_reset(&g, now),
         next_weekly: next_weekly(&g, now),
+        zone_name: g.zone.as_ref().map(|id| zone_name(id)),
         game: g,
     }).collect();
     let enabled = inner.enabled_feeds();
@@ -148,11 +161,12 @@ fn snapshot(paths: &Paths, inner: &Inner) -> Snapshot {
         .map(|n| NoticeView { notice: n.clone(), new: inner.state.is_new(n) }).collect();
     notices.sort_by_key(|v| std::cmp::Reverse((v.notice.at, v.notice.added)));
     let new_notices = notices.iter().filter(|v| v.new).count();
-    let update = inner.state.update.clone().filter(|r| is_newer(&r.version, CURRENT)).map(|release| UpdateView {
+    let update = inner.state.update.clone().filter(|r| is_newer(&r.version, current())).map(|release| UpdateView {
         dismissed: inner.state.update_dismissed.as_deref() == Some(release.version.as_str()), release,
     });
     Snapshot {
-        version: CURRENT, update, update_checked: inner.state.update_checked,
+        version: current(), hotkey_problem: HOTKEY_PROBLEM.lock().unwrap().clone(), update,
+        update_checked: inner.state.update_checked,
         now, games, feeds, settings: inner.settings.clone(), notices, new_notices,
         requests_this_month: inner.state.requests_this_month(now),
     }
@@ -173,6 +187,7 @@ pub(crate) fn remove_custom_game(inner: &mut Inner, id: &str) -> Option<CustomGa
     inner.state.notified.retain(|key, _| !key.contains(&tag));
     inner.state.notices.retain(|n| n.game != id);
     inner.settings.disabled_games.retain(|k| k != id);
+    inner.settings.game_alerts.remove(id);
     Some(game)
 }
 
@@ -185,7 +200,7 @@ pub(crate) fn stage_icon(paths: &Paths, data: &[u8]) -> Result<PathBuf, String> 
         return Err("That image is over 1 MB. Please pick a smaller one.".into());
     }
     if !is_image(data) {
-        return Err("That file isn't a PNG, JPG or WebP image.".into());
+        return Err("That file isn't a PNG, JPG or WebP image.".into()); // the popup sends PNG
     }
     let path = paths.game_icons().join(format!("{STAGED}{}.{}", now_millis(), image_ext(data)));
     write_atomic(&path, data).map_err(|e| e.to_string())?;
@@ -240,15 +255,26 @@ pub fn save_settings(app: AppHandle, store: Store_<'_>, settings: Settings) -> R
     if settings.autostart != current.autostart {
         autostart::set(settings.autostart)?;
     }
+    if settings.tray_icon != current.tray_icon {
+        widget::set_tray_only(settings.tray_icon);
+    }
+    if settings.active_hotkey() != current.active_hotkey() {
+        widget::set_hotkey(settings.active_hotkey())?; // not saved if Windows won't have it
+        *HOTKEY_PROBLEM.lock().unwrap() = None;
+    }
     let mut inner = store.lock();
     let switched_on: Vec<String> = inner.settings.disabled_games.iter().filter(|k| settings.enabled(k)).cloned().collect();
     inner.settings = settings;
-    for key in switched_on {
-        seed_game(&mut inner, &key, now());
+    for key in &switched_on {
+        seed_game(&mut inner, key, now());
     }
+    // a game switched back on gets its banners checked now, as "Refresh banners" would
+    let feeds: Vec<FeedKind> = inner.games().iter().filter(|g| switched_on.contains(&g.key))
+        .filter_map(|g| g.feed.as_deref().and_then(FeedKind::from_key)).collect();
     store.save_settings(&inner);
     store.save_state(&inner);
     drop(inner);
+    store.request_feeds(feeds);
     changed(&app, &store);
     Ok(())
 }
@@ -290,6 +316,12 @@ pub fn clear_notices(app: AppHandle, store: Store_<'_>) {
     changed(&app, &store);
 }
 
+/// Settings is recording a new keyboard shortcut: let go of the current one meanwhile.
+#[tauri::command]
+pub fn suspend_hotkey(suspended: bool) {
+    widget::suspend_hotkey(suspended);
+}
+
 /// The file picker is opening (or has closed): don't hide the popup when it takes focus.
 #[tauri::command]
 pub fn set_dialog_open(open: bool) {
@@ -301,6 +333,26 @@ pub fn set_dialog_open(open: bool) {
 pub fn stage_game_icon(store: Store_<'_>, request: Request<'_>) -> Result<String, String> {
     let InvokeBody::Raw(data) = request.body() else { return Err("No image was sent.".into()) };
     stage_icon(&store.paths, data).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Download an image from a link for a game's icon. Its bytes go back to the popup, which turns them into
+/// a PNG and stages that like a picked file.
+#[tauri::command]
+pub async fn fetch_icon(app: AppHandle, url: String) -> Result<tauri::ipc::Response, String> {
+    let url = url.trim().to_string();
+    let handle = app.clone();
+    let data = tauri::async_runtime::spawn_blocking(move || {
+        let store = handle.state::<Arc<Store>>();
+        if store.lock().settings.offline {
+            return Err("Offline mode is on. Turn it off to download from a link.".to_string());
+        }
+        let result = crate::net::get_image(&url, MAX_ICON_DOWNLOAD_BYTES);
+        let mut inner = store.lock();
+        inner.state.count_request(now());
+        store.save_state(&inner);
+        result
+    }).await.map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(data))
 }
 
 #[tauri::command]
@@ -316,7 +368,7 @@ pub fn add_game(app: AppHandle, store: Store_<'_>, game: GameInput, icon: Option
     clear_staged(&store.paths);
     let mut inner = store.lock();
     inner.custom.push(CustomGame { id: id.clone(), name: game.name, icon, hour: game.hour, minute: game.minute,
-                                   weekly_day: game.weekly_day, offset_minutes: 0 });
+                                   weekly_day: game.weekly_day, zone: game.zone, offset_minutes: 0 });
     seed_game(&mut inner, &id, now());
     store.save_games(&inner);
     store.save_state(&inner);
@@ -342,9 +394,10 @@ pub fn update_game(app: AppHandle, store: Store_<'_>, id: String, game: GameInpu
     if icon != old.icon {
         remove_icon(&store.paths, &old.icon); // the replaced file is no longer needed
     }
+    let moved = (old.hour, old.minute, old.weekly_day, &old.zone) != (game.hour, game.minute, game.weekly_day, &game.zone);
     inner.custom[index] = CustomGame { id: id.clone(), name: game.name, icon, hour: game.hour, minute: game.minute,
-                                       weekly_day: game.weekly_day, offset_minutes: 0 };
-    if (old.hour, old.minute, old.weekly_day) != (game.hour, game.minute, game.weekly_day) {
+                                       weekly_day: game.weekly_day, zone: game.zone, offset_minutes: 0 };
+    if moved {
         seed_game(&mut inner, &id, now()); // a new reset time: don't toast for a reset that only just "happened"
     }
     store.save_games(&inner);
@@ -374,14 +427,34 @@ pub struct ResetPreview {
     next_weekly: Option<Ts>,
 }
 
+/// The time zones a custom game can follow, for the form.
+#[tauri::command]
+pub fn list_time_zones() -> Vec<zones::Zone> {
+    zones::list()
+}
+
 /// When a game with these settings would next reset, for the form's preview.
 #[tauri::command]
 pub fn preview_reset(game: GameInput) -> Result<ResetPreview, String> {
     let g = GameInput { name: "Preview".into(), ..game }.validated()?; // the name may not be typed yet
     let game = CustomGame { id: "preview".into(), name: g.name, icon: None, hour: g.hour, minute: g.minute,
-                            weekly_day: g.weekly_day, offset_minutes: 0 }.to_game();
+                            weekly_day: g.weekly_day, zone: g.zone, offset_minutes: 0 }.to_game();
     let now = now();
     Ok(ResetPreview { next_reset: next_reset(&game, now), next_weekly: next_weekly(&game, now) })
+}
+
+/// The height the popup's sections need (logical pixels, dropdowns counted closed).
+#[tauri::command]
+pub fn fit_popup(app: AppHandle, height: f64) {
+    tray::fit_height(&app, height);
+}
+
+/// The view the popup was asked to open on before it existed ("settings"), if any. Asked once the page
+/// has loaded, which is also when the window gets a second chance to come to the front.
+#[tauri::command]
+pub fn take_view(app: AppHandle) -> Option<&'static str> {
+    tray::popup_ready(&app);
+    tray::take_view()
 }
 
 #[tauri::command]
@@ -422,11 +495,6 @@ pub fn replay_catchup(store: Store_<'_>) {
     inner.replay_catchup = true;
     drop(inner);
     store.wake();
-}
-
-#[tauri::command]
-pub fn set_tray_only(on: bool) {
-    widget::set_tray_only(on);
 }
 
 #[derive(Serialize)]
@@ -473,7 +541,7 @@ pub async fn check_for_update(app: AppHandle) -> Result<String, String> {
     }).await.map_err(|e| e.to_string())?;
     match result {
         Ok(Some(r)) => Ok(format!("Version {} is available.", r.version)),
-        Ok(None) => Ok(format!("You have the latest version ({CURRENT}).")),
+        Ok(None) => Ok(format!("You have the latest version ({}).", current())),
         Err(err) => Err(format!("Couldn't check for updates: {err}")),
     }
 }
@@ -492,7 +560,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         if offline {
             return Err("Offline mode is on. Turn it off to download the update.".to_string());
         }
-        let release = release.filter(|r| is_newer(&r.version, CURRENT)).ok_or("There's no update to install.")?;
+        let release = release.filter(|r| is_newer(&r.version, current())).ok_or("There's no update to install.")?;
         logs::info(format!("Downloading version {}", release.version));
         let dir = store.paths.updates();
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

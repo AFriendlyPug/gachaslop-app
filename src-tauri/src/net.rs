@@ -36,6 +36,26 @@ pub fn get(url: &str) -> Result<Vec<u8>, String> {
     get_within(url, HTTP_TIMEOUT_SECS)
 }
 
+/// An image from a link the user typed: HTTPS only (redirects too), and no bigger than `max_bytes`.
+pub fn get_image(url: &str, max_bytes: u32) -> Result<Vec<u8>, String> {
+    if !url.starts_with("https://") {
+        return Err("The link must start with https://".into());
+    }
+    let mut args = curl_args(url, HTTP_TIMEOUT_SECS);
+    let at = args.len() - 2; // before "--" and the URL
+    args.splice(at..at, ["--proto", "=https", "--proto-redir", "=https", "--max-filesize", &max_bytes.to_string()]
+        .map(String::from));
+    let output = hidden("curl.exe").args(args).output().map_err(|e| format!("could not run curl ({e})"))?;
+    if !output.status.success() {
+        return Err(if output.status.code() == Some(63) { "That image is too big.".into() }
+                   else { "Couldn't download that link.".into() });
+    }
+    if output.stdout.len() > max_bytes as usize {
+        return Err("That image is too big.".into());
+    }
+    Ok(output.stdout)
+}
+
 /// get(), allowing longer for something big (an update's installer).
 pub fn get_within(url: &str, seconds: u32) -> Result<Vec<u8>, String> {
     let output = hidden("curl.exe").args(curl_args(url, seconds)).output()

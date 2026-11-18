@@ -4,6 +4,7 @@
 //! it with just a progress window; the app closes for it and the installer starts the new version.
 //! Nothing is downloaded or installed by itself.
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,8 +14,17 @@ use crate::config::{RELEASES_LATEST_URL, RELEASE_DOWNLOAD_PREFIX, UPDATE_DOWNLOA
 use crate::net;
 use crate::time::{parse_iso, Ts};
 
-/// This build's version (from Cargo.toml, kept the same as tauri.conf.json).
-pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
+static CURRENT: OnceLock<String> = OnceLock::new();
+
+/// Note this build's version (Tauri's, read from package.json, the one place it's set). Called at startup.
+pub fn set_current(version: String) {
+    let _ = CURRENT.set(version);
+}
+
+/// This build's version, e.g. "0.3.0".
+pub fn current() -> &'static str {
+    CURRENT.get().map_or("0.0.0", String::as_str)
+}
 
 /// The installer's options for updating in place: a progress window only (/P), keep the existing install
 /// and its shortcuts (/UPDATE), and start the app again when done (/R).
@@ -30,6 +40,8 @@ pub struct Release {
     pub size: u64,
     pub sha256: Option<String>, // lower-case hex, when GitHub lists it
     pub published: Option<Ts>,
+    #[serde(default)]
+    pub notes: String,          // what's new (Markdown, from CHANGELOG.md)
 }
 
 /// "v0.2.1" or "0.2.1" as numbers.
@@ -61,6 +73,7 @@ pub fn parse_latest(payload: &Value) -> Result<Release, String> {
         size: asset["size"].as_u64().unwrap_or(0),
         sha256: asset["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).map(str::to_ascii_lowercase),
         published: payload["published_at"].as_str().and_then(parse_iso),
+        notes: payload["body"].as_str().unwrap_or_default().trim().to_string(),
     })
 }
 
@@ -69,7 +82,7 @@ pub fn check() -> Result<Option<Release>, String> {
     let body = net::get(RELEASES_LATEST_URL)?;
     let payload: Value = serde_json::from_slice(&body).map_err(|e| format!("not JSON ({e})"))?;
     let latest = parse_latest(&payload)?;
-    Ok(is_newer(&latest.version, CURRENT).then_some(latest))
+    Ok(is_newer(&latest.version, current()).then_some(latest))
 }
 
 /// The SHA-256 from `certutil -hashfile` output (older Windows puts spaces between the bytes).

@@ -22,7 +22,7 @@ cd src-tauri; cargo test   # Rust tests
 cd src-tauri; cargo clippy --all-targets   # keep this warning-free
 ```
 
-GitHub builds only on version tags (a Release with the installer) or the "Run workflow" button; see `.github/workflows/build.yml` and the README's "Building on GitHub".
+GitHub builds only on version tags (a Release with the installer) or the "Run workflow" button; see `.github/workflows/build.yml` and the README's "Building on GitHub". The version lives only in `package.json`: release with a CHANGELOG.md section for it, then `npm version X.Y.Z` and `git push --follow-tags` (the build checks the tag matches, runs clippy with `-D warnings`, and uses that section as the release notes).
 
 `tauri dev` keeps Vite on port 1420; a second `tauri dev` fails with "Port 1420 is already in use" while the first is running. Only one copy of the app runs at a time (see `instance.rs`): launching it again shows the running copy's popup.
 
@@ -35,15 +35,16 @@ GitHub builds only on version tags (a Release with the installer) or the "Run wo
 - `config.rs`: URLs, timings (in seconds) and limits. No side effects.
 - `logs.rs`: `info()`/`warn()` to `%LOCALAPPDATA%\com.gachaslop.app\logs\GachaSlop.log`.
 - `net.rs`: HTTP GET through Windows' own `curl.exe`, and `hidden()` for running System32 tools without a console window.
-- `games.rs`: built-in games (BA 19:00 UTC weekly Sunday; ZZZ EU 03:00 UTC weekly Monday), `CustomGame`, reset maths (`next_reset`, `last_reset`, `next_weekly`, `ordered`).
+- `zones.rs`: time zones for custom games. Windows gives each zone's rule per year (`GetTimeZoneInformationForYear`); `transition_day` and `to_utc` are the plain maths, `local_to_utc` looks rules up (cached; tests add their own with `remember`), `list()` names them for the form.
+- `games.rs`: built-in games (BA 19:00 UTC weekly Sunday; ZZZ EU 03:00 UTC weekly Monday), `CustomGame`, reset maths (`reset_on` a day, then `next_reset`, `last_reset`, `next_weekly`, `ordered`), in UTC or a game's `zone`.
 - `banners.rs`: `FeedKind`, `Rotation`, `FeedState`, both parsers, when to fetch (`data_runs_out`, `record`), icon download and `prune_icons`.
-- `update.rs`: new versions from GitHub Releases: `check()` (latest release, `is_newer` than `CURRENT`), `download()` (only from this repo's release URLs; size, `MZ` and SHA-256 via `certutil` checked) and `run_installer()` (NSIS `/P /UPDATE /R`). Never installs by itself.
+- `update.rs`: new versions from GitHub Releases: `check()` (latest release, `is_newer` than `current()`, which is Tauri's version from `package.json`), `download()` (only from this repo's release URLs; size, `MZ` and SHA-256 via `certutil` checked) and `run_installer()` (NSIS `/P /UPDATE /R`). Never installs by itself.
 - `settings.rs`: `Settings`, `State`, `Paths`, JSON load/save (atomic; an unreadable file is renamed `.bad` and defaults are used).
 - `store.rs`: `Store`, the shared in-memory copy of everything, with a `Condvar` to wake the scheduler.
 - `autostart.rs`: "Start with Windows" via `reg.exe` on `HKCU\...\Run`.
 - `instance.rs`: one copy at a time via a local port (47613).
-- `tray.rs`: popup show/hide/placement (`place()`), shared menu actions (`menu_action`), and the tray icon, which is only shown when the taskbar widget can't be.
-- `widget.rs`: the taskbar strips (one per taskbar) drawn with Win32 (`windows-sys`).
+- `tray.rs`: the popup's life (not created at startup, `"create": false`; built by `popup()` when first shown; with `Settings::free_memory` destroyed `FREE_POPUP_AFTER` seconds after it's hidden, which frees its ~200 MB of WebView2), height (`apply_height`: the home view reports what its sections need with `fit_popup`, counting the upcoming-banner dropdowns closed so opening one scrolls instead of growing; every other view keeps that height and scrolls; clamped to the screen, bottom edge kept above the widget), placement (`place()`), shared menu actions (`menu_action`; a view asked for before the popup exists waits in `take_view`), and the tray icon, shown when the widget can't be or `Settings::tray_icon` is on.
+- `widget.rs`: the taskbar strips (one per taskbar) drawn with Win32 (`windows-sys`), and the global keyboard shortcut (`parse_hotkey`, `set_hotkey`; `RegisterHotKey` on its hidden owner window, `WM_HOTKEY` toggles the popup). It's off by default: only `Settings::active_hotkey()` is registered (empty unless `hotkey_on`).
 - `toast.rs`: the notification cards, a layered top-level window drawn with GDI (text) and GDI+ (icons). `show()` works from any thread.
 - `scheduler.rs`: one thread: fetch due feeds, work out due events, show cards and catch-up, keep the tray in sync.
 - `commands.rs`: the commands the popup calls, and the `Snapshot` it renders.
@@ -58,7 +59,7 @@ Designed for readability: 14px text and never under 12px, colour pairs at 4.5:1 
 
 ### Times
 
-Everything is UTC (`Ts`, Unix seconds) in Rust, in saved files and over IPC. The popup converts to the PC's time zone with `Date`. Rust has no time zone database, so notification text uses relative times only ("Reset 3h ago", "Ends in 6d 0h"). Custom games are entered in UTC; old `games.json` entries with `offsetMinutes` are converted on load (`CustomGame::in_utc`).
+Everything is UTC (`Ts`, Unix seconds) in Rust, in saved files and over IPC. The popup converts to the PC's time zone with `Date`. Rust has no time zone database, so notification text uses relative times only ("Reset 3h ago", "Ends in 6d 0h"). Custom games are entered in UTC, or in a Windows time zone (`CustomGame::zone`) whose daylight saving the reset then follows; old `games.json` entries with `offsetMinutes` are converted on load (`CustomGame::in_utc`).
 
 ### Network: as few requests as possible
 
@@ -68,6 +69,7 @@ Banners are stored in `banners.json` and fetched only when the stored data runs 
 - Nothing new or a failure: back off 30 min, 2 h, 6 h, then every 12 h. Manual refresh is skipped if fetched under 5 minutes ago.
 - Updates: `scheduler::check_update` asks GitHub once a day (`update_due`; off with `Settings::update_checks`, never within 10 minutes of starting, retried after 2 h on failure) and only records a newer `Release` in `state.json` for the popup's banner. The installer is downloaded to `updates\` (emptied at startup) only by the `install_update` command, which then runs it and quits; the installer restarts the app. The version comes from `Cargo.toml`, so keep it in step with `tauri.conf.json` and `package.json` when releasing. Offline mode makes no requests at all.
 - Icons are downloaded once for current and upcoming banners and deleted when no stored banner uses them.
+- A switched-off game makes no requests: `feeds_to_check` and the icon downloads only cover enabled games, and `may_fetch` is asked again before each request, so switching off mid-check stops the rest. Switching a game back on queues its feed (`Store::request_feeds`), checked like a manual refresh.
 
 ### Notifications and catch-up
 
@@ -77,7 +79,7 @@ Cards (`toast.rs`) go above the main taskbar's widget, or beside the popup when 
 
 ### Taskbar widget (`widget.rs`)
 
-Modelled on [Wireless Battery](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor): a layered `WS_CHILD` window parented to each taskbar (`Shell_TrayWnd`, and on Windows 10 every `Shell_SecondaryTrayWnd`), placed left of the notification area or the secondary taskbar's `ClockButton`, repainted and re-placed once a second by a hidden owner window's timer, recreated on `TaskbarCreated`. On Windows 10 the task buttons (`ReBarWindow32` / `WorkerW`) are narrowed so they never slide under it, and given back on quit. Falls back to the tray icon when the main taskbar is vertical, auto-hides or can't be found. Things that matter here:
+Modelled on [Wireless Battery](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor): a layered `WS_CHILD` window parented to each taskbar (`Shell_TrayWnd`, and on Windows 10 every `Shell_SecondaryTrayWnd`), placed left of the notification area or the secondary taskbar's `ClockButton`, repainted and re-placed once a second by a hidden owner window's timer, recreated on `TaskbarCreated`. On Windows 10 the task buttons (`ReBarWindow32` / `WorkerW`) are narrowed so they never slide under it, and given back on quit. Falls back to the tray icon when the main taskbar is vertical, auto-hides or can't be found. Confirmed working on Windows 11 (a tester's PC, Nov 2026); Windows 11's secondary taskbars still get no strip. The taskbar's light/dark theme is read once and again after `WM_SETTINGCHANGE`, not on every repaint. Things that matter here:
 - The background must never be alpha 0: Windows passes clicks on fully transparent pixels to the taskbar behind (`background()` uses alpha 1).
 - A layered child window needs the Windows 8+ `supportedOS` entries in `src-tauri/windows-app-manifest.xml` (applied by `build.rs`); Tauri's default manifest doesn't have them.
 - Clicks are posted to the owner window rather than handled inside the taskbar's child window.

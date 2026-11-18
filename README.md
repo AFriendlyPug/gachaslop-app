@@ -40,9 +40,14 @@ A small Windows app that counts down to game resets and shows the current and up
 - **Notification cards** for resets, an optional heads-up before them, new banners and banners ending within a day. The app draws these itself rather than using Windows notifications: a card with the game's icon appears above the taskbar widget (or beside the popup while it's open) and fades after a few seconds. Hover to keep it, click to open the popup, × or right-click to close it. While a full-screen game or presentation is in front, cards wait and then show together as one.
 - **Catch-up:** anything that happened while the app was closed or the PC was asleep is shown when it next starts. Several at once become one summary card, and the widget shows a red dot until you've opened the popup.
 - **Notifications list:** every notification that came in is kept for 30 days. The newest unread ones are listed at the top of the popup (once read, just the latest in one line); click it, or the bell, for the full list, grouped by day and newest first, with what was missed while the app was closed marked.
-- **Your own games:** add any game with an icon, a name and its reset time in UTC (plus an optional weekly reset day); the form shows what that is in your time. Added games get reset notifications but no banners.
+- **Your own games:** add any game with a name, an icon (any image file, or paste a link and the app downloads it) and its reset time, plus an optional weekly reset day. Give the time in UTC, or pick the game server's time zone and the reset follows its daylight saving by itself; the form shows what that is in your time. Added games get reset notifications but no banners.
+- **Notifications for each game:** besides the switches for all games, turn resets, heads-ups or banners off for one game. The Notifications list can be filtered by game.
 - **Works offline:** banners and icons are stored locally. Offline mode (Settings or the tray menu) stops all network requests.
 - **Start with Windows** (optional): starts hidden in the tray.
+- **Keyboard shortcut** (off unless you turn it on in Settings): Ctrl+Alt+G opens and closes the popup from anywhere. Change it there: click it and press the keys you want.
+- **Light on memory:** most of the app's memory is the popup, so it's freed 30 seconds after you close it and rebuilt when you open it (switch off "Free memory when closed" for instant opening). The app on its own uses about 10 MB.
+- **A window that fits:** the popup grows and shrinks with its cards, staying just above the taskbar. Opening the upcoming banners scrolls the cards instead of making it taller, and Settings and the other views keep the same size.
+- **Tray icon instead:** prefer a tray icon to the countdowns by the clock? Switch on "Show as a tray icon" in Settings.
 - **Updates, only when you say so:** once a day (or with Check now in Settings) the app asks GitHub whether there's a newer release and, if so, shows a banner. Install update downloads the new installer, checks it's exactly the file GitHub lists (size and SHA-256) and updates in place with just a progress window; GachaSlop closes and opens again by itself. Nothing is ever downloaded or installed without you choosing to, the daily check can be switched off, and you can always download the installer yourself instead.
 - **Testing** (bottom of Settings): show any kind of notification card now (marked [Test]), replay catch-up as if you'd just come back, switch to the tray icon to try the fallback, see how the widget is shown, and open the data folder or log. None of it uses the network.
 
@@ -64,6 +69,8 @@ The app makes as few requests as possible. Banner lists are stored and only fetc
 - **Icons** are downloaded once per character and deleted when no stored banner uses them.
 - **Refresh banners** does nothing if the lists were fetched in the last 5 minutes.
 - **Updates:** one request to GitHub a day to see if there's a new version (no sooner than 10 minutes after starting; can be switched off). The installer is only downloaded when you choose Install update.
+
+A game you switch off makes no requests at all, its icons included; switching it back on checks its banners straight away (unless they were fetched in the last 5 minutes).
 
 Nothing is fetched at startup, on waking, or on opening the popup. Offline mode stops all of it, update checks included. Settings shows the number of requests this month.
 
@@ -99,7 +106,12 @@ cd src-tauri && cargo test
 
 [.github/workflows/build.yml](.github/workflows/build.yml) builds on a GitHub Windows machine (tests first, then the installer), but only when asked, to save Actions minutes:
 
-- **Release:** set the new version in `src-tauri/tauri.conf.json` (`"version"`), commit and push, then tag it: `git tag v0.2.0` and `git push origin v0.2.0`. A GitHub Release named "GachaSlop v0.2.0" appears with the installer (`GachaSlop_0.2.0_x64-setup.exe`) and the plain `.exe`.
+- **Release:** the version is set in one place, `package.json` (Tauri and the app read it from there).
+  1. In [CHANGELOG.md](CHANGELOG.md), move the notes under "Unreleased" into a new section for the version, e.g. `## [0.4.0] - 2026-12-01`, and commit. These become the release notes, which the app's update banner shows.
+  2. `npm version 0.4.0` (or `npm version minor`): sets the version, commits and tags `v0.4.0`.
+  3. `git push --follow-tags`.
+
+  The build stops if the tag doesn't match `package.json` or CHANGELOG.md has no notes for it. Otherwise a GitHub Release named "GachaSlop v0.4.0" appears with the installer (`GachaSlop_0.4.0_x64-setup.exe`) and the plain `.exe`, and the build runs the tests and clippy first.
 - **Test build:** Actions tab, "Build", "Run workflow". The files are attached to that run as artifacts.
 
 The installer isn't code-signed, so Windows SmartScreen warns the first time it runs ("More info", then "Run anyway").

@@ -30,7 +30,11 @@ fn the_latest_release_is_read_from_github() {
         size: 1_415_511,
         sha256: Some("e9c13c97d3b626f724a0c190ae03d494b873fb27297a3601215b74617548f321".into()),
         published: Some(utc(2026, 11, 18, 5, 35) + 50),
+        notes: String::new(), // this release's notes were GitHub's, not saved in the fixture
     });
+    let mut payload = fixture("github_latest.json");
+    payload["body"] = "- Updates from GitHub, only when you choose.\n".into();
+    assert_eq!(parse_latest(&payload).unwrap().notes, "- Updates from GitHub, only when you choose.");
 }
 
 #[test]

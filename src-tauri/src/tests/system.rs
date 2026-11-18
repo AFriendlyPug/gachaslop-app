@@ -32,3 +32,9 @@ fn single_instance_messages_are_distinct_lines() {
     assert!(SHOW.ends_with(b"\n") && OK.ends_with(b"\n"));
     assert!(SHOW.starts_with(b"gachaslop:") && OK.starts_with(b"gachaslop:"));
 }
+
+#[test]
+fn image_links_must_be_https() {
+    assert_eq!(crate::net::get_image("http://example.com/a.png", 1000), Err("The link must start with https://".into()));
+    assert!(crate::net::get_image("file:///C:/Windows/win.ini", 1000).is_err());
+}

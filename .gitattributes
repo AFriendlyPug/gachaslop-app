@@ -1,0 +1,7 @@
+# Text is stored and checked out with LF line endings on every PC, so Git doesn't warn about them on Windows.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary
+*.webp binary

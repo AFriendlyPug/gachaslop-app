@@ -4,6 +4,7 @@ mod time;
 mod config;
 mod logs;
 mod net;
+mod zones;
 mod games;
 mod banners;
 mod update;
@@ -44,26 +45,31 @@ pub fn run() {
             commands::refresh_banners,
             commands::mark_notices_read,
             commands::clear_notices,
+            commands::suspend_hotkey,
             commands::check_for_update,
             commands::install_update,
             commands::dismiss_update,
             commands::set_dialog_open,
             commands::stage_game_icon,
             commands::discard_staged,
+            commands::fetch_icon,
             commands::add_game,
             commands::update_game,
             commands::delete_game,
             commands::preview_reset,
+            commands::list_time_zones,
             commands::test_notification,
             commands::replay_catchup,
-            commands::set_tray_only,
             commands::diagnostics,
             commands::open_path,
             commands::hide_popup,
+            commands::take_view,
+            commands::fit_popup,
             commands::quit,
         ])
         .setup(move |app| {
             logs::init(&app.path().app_log_dir()?);
+            update::set_current(app.package_info().version.to_string());
             let paths = Paths { root: app.path().app_data_dir()? };
             std::fs::create_dir_all(&paths.root)?;
             let store = Arc::new(Store::open(paths));
@@ -76,7 +82,13 @@ pub fn run() {
             }
             app.manage(store.clone());
             tray::build(app.handle(), &store)?;
-            widget::start(app.handle()); // on the taskbar by the clock; the tray icon only if it can't be
+            widget::set_tray_only(store.lock().settings.tray_icon);
+            widget::start(app.handle()); // on the taskbar by the clock; the tray icon if chosen or it can't be
+            let hotkey = store.lock().settings.active_hotkey().to_string();
+            if let Err(err) = widget::set_hotkey(&hotkey) {
+                logs::warn(format!("Keyboard shortcut not set ({err})"));
+                *commands::HOTKEY_PROBLEM.lock().unwrap() = Some(err);
+            }
             match listener {
                 Some(listener) => {
                     let handle = app.handle().clone();

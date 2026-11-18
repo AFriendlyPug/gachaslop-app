@@ -1,6 +1,6 @@
 # Builds the Windows installer on GitHub.
-# - Push a version tag (e.g. `git tag v0.1.0; git push origin v0.1.0`): builds and publishes a GitHub Release
-#   with the installer and the plain .exe attached.
+# - Push a version tag (`npm version 0.4.0` then `git push --follow-tags`): checks, builds and publishes a GitHub
+#   Release with the installer and the plain .exe, its notes taken from that version's section of CHANGELOG.md.
 # - "Run workflow" in the Actions tab: a test build; the files are attached to the run as artifacts.
 # Ordinary pushes don't build, to save Actions minutes.
 name: Build
@@ -25,10 +25,36 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+
+      # the version lives in package.json only (tauri.conf.json reads it from there)
+      - name: Check the tag matches the version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match package.json's version $version"
+            exit 1
+          fi
+
+      - name: Release notes from CHANGELOG.md
+        if: github.ref_type == 'tag'
+        id: notes
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="[$version]" '/^## / { found = index($0, v) > 0; next } found' CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md has no notes for $version"
+            exit 1
+          fi
+          { echo 'body<<END_OF_NOTES'; cat release-notes.md; echo 'END_OF_NOTES'; } >> "$GITHUB_OUTPUT"
 
       - run: npm ci
 
@@ -38,6 +64,9 @@ jobs:
           npm run check
           cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -45,6 +74,6 @@ jobs:
           # a release only for tag pushes; a manual run just builds
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: ${{ github.ref_type == 'tag' && format('GachaSlop {0}', github.ref_name) || '' }}
-          generateReleaseNotes: true
+          releaseBody: ${{ steps.notes.outputs.body }}
           uploadPlainBinary: true
           uploadWorkflowArtifacts: ${{ github.ref_type != 'tag' }}

@@ -26,15 +26,48 @@
     setTimeout(() => (message = ""), 4000);
   }
 
+  // ---- height: fits what's shown, unless the user dragged the top edge to a height of their own ----
+  let header: HTMLElement;
+  let content: HTMLElement;
+  let lastFit = 0;
+
+  // The window fits the home screen's sections, with the upcoming-banner dropdowns counted closed: opening
+  // one scrolls the cards instead of growing the window. Every other view keeps that height and scrolls.
+  function fit() {
+    if (!content || !header || view.name !== "home") return;
+    const body = content.parentElement!;
+    const padding = parseFloat(getComputedStyle(body).paddingTop) + parseFloat(getComputedStyle(body).paddingBottom);
+    const status = body.previousElementSibling?.classList.contains("status-line") ? (body.previousElementSibling as HTMLElement).offsetHeight : 0;
+    const dropdowns = [...content.querySelectorAll<HTMLDetailsElement>("details.upcoming[open]")]
+      .reduce((sum, d) => sum + d.offsetHeight - (d.querySelector("summary") as HTMLElement).offsetHeight, 0);
+    const height = Math.ceil(header.offsetHeight + status + content.offsetHeight - dropdowns + padding + 2); // + border
+    if (Math.abs(height - lastFit) >= 1) {
+      lastFit = height;
+      api.fitPopup(height);
+    }
+  }
+
+  $effect(() => {
+    if (!content) return;
+    const watch = new ResizeObserver(fit);
+    watch.observe(content);
+    watch.observe(header);
+    return () => watch.disconnect();
+  });
+
+  // the tray menu's Settings: asked before this window existed, or told while it's open
+  const openPending = () => api.takeView().then((v) => { if (v) view = { name: v }; });
+
   onMount(() => {
     load();
+    openPending();
     // countdowns tick only while the popup is on screen
     const timer = setInterval(() => { if (!document.hidden) now = Date.now(); }, 1000);
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") api.hide(); };
     window.addEventListener("keydown", onKey);
     const unlisten = [
       listen("state-changed", load),
-      listen("open-settings", () => (view = { name: "settings" })),
+      listen("open-settings", openPending),
     ];
     return () => {
       clearInterval(timer);
@@ -55,7 +88,7 @@
 </script>
 
 <main class="panel">
-  <header class="bar">
+  <header class="bar" bind:this={header}>
     {#if view.name !== "home"}
       <button class="back" onclick={() => (view = view.name === "edit" ? { name: "settings" } : { name: "home" })}>
         ‹ {view.name === "edit" ? "Settings" : "Back"}
@@ -84,6 +117,7 @@
   {#if message}<p class="status-line" role="status">{message}</p>{/if}
 
   <div class="body">
+    <div class="content" bind:this={content}>
     {#if !snap}
       <p class="muted">Loading…</p>
     {:else if view.name === "home"}
@@ -132,5 +166,6 @@
     {:else}
       <GameEditor game={view.game} onDone={() => (view = { name: "settings" })} />
     {/if}
+    </div>
   </div>
 </main>

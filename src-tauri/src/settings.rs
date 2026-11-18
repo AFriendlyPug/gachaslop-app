@@ -24,24 +24,58 @@ pub struct Settings {
     pub offline: bool,               // make no network requests at all
     pub autostart: bool,
     pub update_checks: bool,         // look for a new version once a day (never installs by itself)
+    pub tray_icon: bool,             // a tray icon instead of the taskbar widget
+    pub game_alerts: BTreeMap<String, Alerts>, // per game; a game not listed gets everything
+    pub hotkey_on: bool,             // the keyboard shortcut is off unless the user turns it on
+    pub hotkey: String,              // the shortcut that opens and closes the popup, e.g. "Ctrl+Alt+G"
+    pub free_memory: bool,           // destroy the popup's web view a while after it's closed
+}
+
+/// Which notifications one game sends, on top of the switches for all games.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Alerts {
+    pub resets: bool,
+    pub headsup: bool,
+    pub banners: bool,
+}
+
+impl Default for Alerts {
+    fn default() -> Alerts {
+        Alerts { resets: true, headsup: true, banners: true }
+    }
 }
 
 impl Default for Settings {
     fn default() -> Settings {
         Settings { disabled_games: vec![], reset_toasts: true, headsup_minutes: 0, banner_toasts: true,
-                   catchup: true, offline: false, autostart: false, update_checks: true }
+                   catchup: true, offline: false, autostart: false, update_checks: true,
+                   tray_icon: false, game_alerts: BTreeMap::new(),
+                   hotkey_on: false, hotkey: "Ctrl+Alt+G".into(), free_memory: true }
     }
 }
 
 impl Settings {
+    /// The keyboard shortcut to register: none while it's switched off.
+    pub fn active_hotkey(&self) -> &str {
+        if self.hotkey_on { self.hotkey.trim() } else { "" }
+    }
+
     pub fn enabled(&self, key: &str) -> bool {
         !self.disabled_games.iter().any(|k| k == key)
+    }
+
+    /// The notifications this game sends (all of them unless the user turned some off).
+    pub fn alerts(&self, game: &str) -> Alerts {
+        self.game_alerts.get(game).copied().unwrap_or_default()
     }
 
     pub fn validated(mut self) -> Settings {
         self.headsup_minutes = self.headsup_minutes.min(MAX_HEADSUP_MINUTES);
         self.disabled_games.sort();
         self.disabled_games.dedup();
+        self.game_alerts.retain(|_, a| *a != Alerts::default()); // only what differs is saved
+        self.hotkey = self.hotkey.trim().to_string();
         self
     }
 }

@@ -21,7 +21,7 @@ fn shows_the_two_soonest_games() {
     assert_eq!(widget_lines(&games, now), [("BA".to_string(), "02:15:07".to_string()),
                                            ("ZZZ".to_string(), "10:15:07".to_string())]);
     games.push(CustomGame { id: "custom-1".into(), name: "Honkai Star Rail".into(), icon: None, hour: 17, minute: 0,
-                            weekly_day: None, offset_minutes: 0 }.to_game());
+                            weekly_day: None, zone: None, offset_minutes: 0 }.to_game());
     let lines = widget_lines(&games, now);
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0], ("HSR".to_string(), "00:15:07".to_string()));
@@ -99,4 +99,23 @@ fn lines_are_spaced_like_the_clock() {
     assert_eq!(line_tops(30, 15, 2, CLOCK_LINE_PITCH), [0, 15]);
     // one game: centred
     assert_eq!(line_tops(40, 15, 1, CLOCK_LINE_PITCH), [12]);
+}
+
+#[test]
+fn keyboard_shortcuts_are_read() {
+    assert_eq!(parse_hotkey("Ctrl+Alt+G"), Ok(Some(Hotkey { mods: 2 | 1, vk: b'G' as u32 })));
+    assert_eq!(parse_hotkey(" ctrl + shift + f9 "), Ok(Some(Hotkey { mods: 2 | 4, vk: 0x78 })));
+    assert_eq!(parse_hotkey("Win+5"), Ok(Some(Hotkey { mods: 8, vk: b'5' as u32 })));
+    assert_eq!(parse_hotkey("Alt+Up"), Ok(Some(Hotkey { mods: 1, vk: 0x26 })));
+    assert_eq!(parse_hotkey("F12"), Ok(Some(Hotkey { mods: 0, vk: 0x7B }))); // a function key may stand alone
+    assert_eq!(parse_hotkey(""), Ok(None)); // no shortcut
+}
+
+#[test]
+fn shortcuts_that_would_get_in_the_way_are_refused() {
+    assert!(parse_hotkey("G").is_err()); // would fire while typing
+    assert!(parse_hotkey("Shift+G").is_err());
+    assert!(parse_hotkey("Ctrl+Hyper+G").is_err());
+    assert!(parse_hotkey("Ctrl+Semicolon").is_err());
+    assert!(parse_hotkey("Ctrl+F25").is_err());
 }

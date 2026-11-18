@@ -1,14 +1,15 @@
 //! The popup: showing it above the taskbar widget (or the tray icon), and the menu actions both share.
 //! The tray icon itself is only shown when the taskbar widget can't be (see widget.rs).
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
+use crate::config::{FREE_POPUP_AFTER, MIN_POPUP_HEIGHT};
 use crate::games::ordered;
 use crate::store::Store;
 use crate::time::{fmt_duration, now};
@@ -18,6 +19,12 @@ const POPUP: &str = "main";
 /// A click on the tray icon while the popup is open first takes focus away (hiding it): don't then
 /// show it again straight away.
 const REOPEN_GUARD: Duration = Duration::from_millis(300);
+/// How long after "lost focus" to check whether another window really took over (see `popup()`).
+const BLUR_CHECK: Duration = Duration::from_millis(100);
+/// Just after the popup is shown, losing focus never hides it: the first time, the web view inside takes a
+/// moment to start, and Windows may not let the new window come to the front until it has.
+const SETTLE: Duration = Duration::from_millis(1500);
+static SHOWN: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// True while the icon file picker is open, so the popup doesn't hide when it loses focus to it.
 pub static DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
@@ -25,6 +32,12 @@ static LAST_BLUR_HIDE: Mutex<Option<Instant>> = Mutex::new(None);
 /// What the popup opens above: the taskbar widget, or the tray icon when that's in use.
 static ANCHOR: Mutex<Option<Area>> = Mutex::new(None);
 static OFFLINE_ITEM: OnceLock<CheckMenuItem<tauri::Wry>> = OnceLock::new();
+/// Counts the popup's hides, so a delayed free only happens if it hasn't been shown since.
+static HIDES: AtomicU64 = AtomicU64::new(0);
+/// A view for the popup to open on ("settings"), kept until it asks: it may not exist yet to be told.
+static PENDING_VIEW: Mutex<Option<&'static str>> = Mutex::new(None);
+/// The height the popup's contents last asked for, so a rebuilt popup opens at it rather than jumping.
+static FITTED: Mutex<Option<f64>> = Mutex::new(None);
 
 /// The tray icon, and the same icon with a dot for "missed while you were away".
 struct Icons {
@@ -111,22 +124,122 @@ pub fn build(app: &AppHandle, store: &Arc<Store>) -> tauri::Result<()> {
         .build(app)?;
     let _ = tray.set_visible(false); // the taskbar widget is used instead, when it can be
 
-    if let Some(window) = app.get_webview_window(POPUP) {
-        let popup = window.clone();
-        window.on_window_event(move |event| match event {
-            WindowEvent::Focused(true) => DIALOG_OPEN.store(false, Ordering::SeqCst), // back from the picker
-            WindowEvent::Focused(false) if !DIALOG_OPEN.load(Ordering::SeqCst) => {
-                *LAST_BLUR_HIDE.lock().unwrap() = Some(Instant::now());
-                let _ = popup.hide();
-            }
-            WindowEvent::CloseRequested { api, .. } => {
-                api.prevent_close();
-                let _ = popup.hide();
-            }
-            _ => {}
-        });
-    }
     Ok(())
+}
+
+/// The popup, built from its tauri.conf.json settings if it doesn't exist (not at startup, nor after it
+/// was freed): it hides when it loses focus (unless the file picker took it) or is closed.
+fn popup(app: &AppHandle) -> Option<WebviewWindow> {
+    if let Some(window) = app.get_webview_window(POPUP) {
+        return Some(window);
+    }
+    let config = app.config().app.windows.iter().find(|w| w.label == POPUP)?.clone();
+    let window = WebviewWindowBuilder::from_config(app, &config).and_then(|b| b.build())
+        .inspect_err(|e| crate::logs::warn(format!("Could not open the popup ({e})"))).ok()?;
+    if let Some(height) = *FITTED.lock().unwrap() {
+        apply_height(&window, height); // before it's shown, so it opens at its last size
+    }
+    let (popup, handle) = (window.clone(), app.clone());
+    window.on_window_event(move |event| match event {
+        WindowEvent::Focused(true) => DIALOG_OPEN.store(false, Ordering::SeqCst), // back from the picker
+        WindowEvent::Focused(false) if !DIALOG_OPEN.load(Ordering::SeqCst) => {
+            // Focus also "leaves" the window when it moves into the page inside it, which is what happens
+            // just after a freed popup is built: hiding then made the first click seem to do nothing. So
+            // look again a moment later, and hide only if another window is now in front.
+            let (popup, handle) = (popup.clone(), handle.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(BLUR_CHECK);
+                let main = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    let settling = SHOWN.lock().unwrap().is_some_and(|t| t.elapsed() < SETTLE);
+                    let lost = popup.is_visible().unwrap_or(false) && !is_foreground(&popup) && !settling;
+                    if lost && !DIALOG_OPEN.load(Ordering::SeqCst) {
+                        *LAST_BLUR_HIDE.lock().unwrap() = Some(Instant::now());
+                        hide(&main, &popup);
+                    }
+                });
+            });
+        }
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            hide(&handle, &popup);
+        }
+        _ => {}
+    });
+    Some(window)
+}
+
+/// Make the popup `height` logical pixels tall, within its screen, and keep it in place above the widget
+/// (its top edge moves, its bottom stays).
+fn apply_height(window: &WebviewWindow, height: f64) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let screen = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten());
+    let most = screen.map_or(f64::MAX, |m| m.work_area().size.height as f64 / scale - 24.0); // the margins
+    let height = height.round().clamp(MIN_POPUP_HEIGHT as f64, most.max(MIN_POPUP_HEIGHT as f64));
+    let width = window.inner_size().map_or(400.0, |s| s.width as f64 / scale);
+    let _ = window.set_size(LogicalSize::new(width, height));
+    if window.is_visible().unwrap_or(false) {
+        position(window);
+    }
+}
+
+/// The height the popup's sections need (logical pixels, dropdowns counted closed).
+pub fn fit_height(app: &AppHandle, height: f64) {
+    *FITTED.lock().unwrap() = Some(height);
+    if let Some(window) = app.get_webview_window(POPUP) {
+        apply_height(&window, height);
+    }
+}
+
+/// True if this window is the one in front (it, or the page inside it, has the keyboard).
+fn is_foreground(window: &WebviewWindow) -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        let front = unsafe { GetForegroundWindow() } as usize;
+        window.hwnd().is_ok_and(|h| h.0 as usize == front)
+    }
+    #[cfg(not(windows))]
+    {
+        window.is_focused().unwrap_or(false)
+    }
+}
+
+/// Hide the popup and, with "Free memory when closed", destroy it a little later if it stays hidden.
+fn hide(app: &AppHandle, window: &WebviewWindow) {
+    let _ = window.hide();
+    let hides = HIDES.fetch_add(1, Ordering::SeqCst) + 1;
+    if !app.state::<Arc<Store>>().lock().settings.free_memory {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(FREE_POPUP_AFTER));
+        let main = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let Some(window) = main.get_webview_window(POPUP) else { return };
+            let still_hidden = HIDES.load(Ordering::SeqCst) == hides && !window.is_visible().unwrap_or(true);
+            if still_hidden && !DIALOG_OPEN.load(Ordering::SeqCst) {
+                let _ = window.destroy();
+            }
+        });
+    });
+}
+
+/// The page inside the popup has loaded: if the window didn't get to the front when it was shown (on the
+/// first start Windows may refuse while the web view is still starting), ask again now.
+pub fn popup_ready(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(POPUP)
+        && window.is_visible().unwrap_or(false)
+        && !is_foreground(&window)
+    {
+        let _ = window.set_focus();
+    }
+}
+
+/// The view the popup should open on, if one was asked for before it could be told (see PENDING_VIEW).
+pub fn take_view() -> Option<&'static str> {
+    PENDING_VIEW.lock().unwrap().take()
 }
 
 /// The tray and widget menus: "open", "refresh", "offline", "settings" or "quit".
@@ -135,6 +248,7 @@ pub fn menu_action(app: &AppHandle, id: &str) {
     match id {
         "open" => show_popup(app),
         "settings" => {
+            *PENDING_VIEW.lock().unwrap() = Some("settings"); // the popup asks when it starts, or is told
             show_popup(app);
             let _ = app.emit("open-settings", ());
         }
@@ -184,10 +298,9 @@ pub fn set_anchor(area: Area) {
 }
 
 pub fn toggle_popup(app: &AppHandle) {
-    let Some(window) = app.get_webview_window(POPUP) else { return };
     let just_hidden = LAST_BLUR_HIDE.lock().unwrap().is_some_and(|t| t.elapsed() < REOPEN_GUARD);
-    if window.is_visible().unwrap_or(false) {
-        let _ = window.hide();
+    if let Some(window) = app.get_webview_window(POPUP).filter(|w| w.is_visible().unwrap_or(false)) {
+        hide(app, &window);
     } else if !just_hidden {
         show_popup(app);
     }
@@ -207,11 +320,13 @@ fn position(window: &WebviewWindow) {
 }
 
 pub fn show_popup(app: &AppHandle) {
-    let Some(window) = app.get_webview_window(POPUP) else { return };
+    HIDES.fetch_add(1, Ordering::SeqCst); // a pending free no longer applies
+    let Some(window) = popup(app) else { return };
     position(&window);
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
+    *SHOWN.lock().unwrap() = Some(Instant::now());
     let store = app.state::<Arc<Store>>();
     let was_unseen = std::mem::replace(&mut store.lock().state.unseen, false);
     if was_unseen {
@@ -223,7 +338,7 @@ pub fn show_popup(app: &AppHandle) {
 
 pub fn hide_popup(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(POPUP) {
-        let _ = window.hide();
+        hide(app, &window);
     }
 }
 

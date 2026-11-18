@@ -46,7 +46,6 @@ fn iso_formatting_and_months() {
     assert_eq!(parse_iso(&fmt_iso(1_794_369_600)), Some(1_794_369_600));
     assert_eq!(month(utc(2026, 11, 30, 23, 59)), "2026-11");
     assert_eq!(month(utc(2026, 12, 1, 0, 0)), "2026-12");
-    assert_eq!(start_of_day(utc(2026, 11, 18, 19, 5)), utc(2026, 11, 18, 0, 0));
 }
 
 #[test]

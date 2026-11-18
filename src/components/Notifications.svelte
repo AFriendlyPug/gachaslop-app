@@ -12,9 +12,14 @@
   const fresh = new Set(untrack(() => snap.notices.filter((n) => n.new).map(key)));
   onMount(() => { if (fresh.size) api.markNoticesRead(); });
 
+  // filter by game: the games that have notifications in the list
+  let only = $state<string | null>(null);
+  const gamesListed = $derived([...new Set(snap.notices.map((n) => n.game))]);
+  const shown = $derived(only ? snap.notices.filter((n) => n.game === only) : snap.notices);
+
   const groups = $derived.by(() => {
     const out: { day: string; notices: Notice[] }[] = [];
-    for (const n of snap.notices) {
+    for (const n of shown) {
       const day = dayLabel(n.at, now);
       if (out.at(-1)?.day !== day) out.push({ day, notices: [] });
       out.at(-1)!.notices.push(n);
@@ -36,6 +41,16 @@
 </script>
 
 {#if snap.notices.length}
+  {#if gamesListed.length > 1}
+    <div class="chips" role="group" aria-label="Show notifications from">
+      <button class="chip" aria-pressed={only === null} onclick={() => (only = null)}>All</button>
+      {#each gamesListed as key (key)}
+        <button class="chip" aria-pressed={only === key} onclick={() => (only = key)}>
+          {snap.games.find((g) => g.key === key)?.short ?? key}
+        </button>
+      {/each}
+    </div>
+  {/if}
   {#each groups as group (group.day)}
     <section class="group" aria-label={group.day}>
       <h2>{group.day}</h2>

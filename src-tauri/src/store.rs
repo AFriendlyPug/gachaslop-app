@@ -12,12 +12,13 @@ pub struct Inner {
     pub custom: Vec<CustomGame>,
     pub feeds: Feeds,
     pub refresh_requested: bool, // manual "Refresh banners", picked up by the scheduler
+    pub refresh_feeds: Vec<FeedKind>, // feeds of games just switched back on: checked as if refreshed by hand
     pub replay_catchup: bool,    // Settings' "Replay catch-up": the next pass treats what's due as missed
 }
 
 impl Inner {
     pub fn new(settings: Settings, state: State, custom: Vec<CustomGame>, feeds: Feeds) -> Inner {
-        Inner { settings, state, custom, feeds, refresh_requested: false, replay_catchup: false }
+        Inner { settings, state, custom, feeds, refresh_requested: false, refresh_feeds: vec![], replay_catchup: false }
     }
 
     /// Every game, built-in first, then the user's in the order they were added.
@@ -74,6 +75,15 @@ impl Store {
     /// Ask the scheduler to check the banner feeds now (it skips any fetched in the last few minutes).
     pub fn request_refresh(&self) {
         self.lock().refresh_requested = true;
+        self.wake();
+    }
+
+    /// Ask the scheduler to check these feeds now, as "Refresh banners" would (a game was switched back on).
+    pub fn request_feeds(&self, kinds: Vec<FeedKind>) {
+        if kinds.is_empty() {
+            return;
+        }
+        self.lock().refresh_feeds.extend(kinds);
         self.wake();
     }
 

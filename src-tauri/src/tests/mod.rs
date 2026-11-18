@@ -11,6 +11,7 @@ mod toast;
 mod tray;
 mod update;
 mod widget;
+mod zones;
 
 use std::path::{Path, PathBuf};
 

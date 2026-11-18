@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crate::games::{ordered, Game};
 use crate::time::{fmt_clock, Ts};
 
-// For Settings' "Testing" section: how the widget is shown, and a switch to try the tray icon fallback.
+// How the widget is shown (for Settings' "Testing" section), and the "Show as a tray icon" setting.
 static STRIPS: AtomicUsize = AtomicUsize::new(0);
 static TRAY_SHOWN: AtomicBool = AtomicBool::new(false);
 static TRAY_ONLY: AtomicBool = AtomicBool::new(false);
@@ -21,7 +21,7 @@ static TRAY_ONLY: AtomicBool = AtomicBool::new(false);
 pub struct Status {
     pub strips: usize,     // taskbars with a strip
     pub tray_shown: bool,  // the tray icon is in use
-    pub tray_only: bool,   // switched to the tray icon for testing (not saved)
+    pub tray_only: bool,   // the "Show as a tray icon" setting
 }
 
 pub fn status() -> Status {
@@ -98,11 +98,69 @@ pub fn premultiply(bgra: &mut [u8], (r, g, b): (u8, u8, u8), background: [u8; 4]
     }
 }
 
+/// A keyboard shortcut: Windows' modifier flags and virtual-key code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hotkey {
+    pub mods: u32,
+    pub vk: u32,
+}
+
+const MOD_ALT: u32 = 1;
+const MOD_CONTROL: u32 = 2;
+const MOD_SHIFT: u32 = 4;
+const MOD_WIN: u32 = 8;
+const NAMED_KEYS: [(&str, u32); 10] = [("Space", 0x20), ("PageUp", 0x21), ("PageDown", 0x22), ("End", 0x23),
+    ("Home", 0x24), ("Left", 0x25), ("Up", 0x26), ("Right", 0x27), ("Down", 0x28), ("Insert", 0x2D)];
+
+/// Read a shortcut as Settings writes it ("Ctrl+Alt+G", "Ctrl+Shift+F9"); "" means none. It needs Ctrl, Alt
+/// or Win (Shift alone isn't enough), except with a function key.
+pub fn parse_hotkey(text: &str) -> Result<Option<Hotkey>, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let parts: Vec<&str> = text.split('+').map(str::trim).collect();
+    let (key, modifiers) = parts.split_last().ok_or("No key given.")?;
+    let mut mods = 0;
+    for m in modifiers {
+        mods |= match m.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => MOD_CONTROL,
+            "alt" => MOD_ALT,
+            "shift" => MOD_SHIFT,
+            "win" => MOD_WIN,
+            _ => return Err(format!("\"{m}\" isn't Ctrl, Alt, Shift or Win.")),
+        };
+    }
+    let upper = key.to_ascii_uppercase();
+    let function = upper.strip_prefix('F').and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=24).contains(n));
+    let vk = if let Some(n) = function {
+        0x6F + n // F1 is 0x70
+    } else if upper.len() == 1 && upper.chars().all(|c| c.is_ascii_alphanumeric()) {
+        upper.chars().next().unwrap() as u32 // 'A'..'Z' and '0'..'9' are their own codes
+    } else if let Some((_, vk)) = NAMED_KEYS.iter().find(|(name, _)| name.eq_ignore_ascii_case(key)) {
+        *vk
+    } else {
+        return Err(format!("{key} can't be used in a shortcut."));
+    };
+    if function.is_none() && mods & (MOD_CONTROL | MOD_ALT | MOD_WIN) == 0 {
+        return Err("Use Ctrl, Alt or Win in the shortcut, so it doesn't get in the way of typing.".into());
+    }
+    Ok(Some(Hotkey { mods, vk }))
+}
+
 #[cfg(windows)]
-pub use win::{start, stop};
+pub use win::{set_hotkey, start, stop, suspend_hotkey};
+
+#[cfg(not(windows))]
+pub fn set_hotkey(_text: &str) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn suspend_hotkey(_suspended: bool) {}
 
 /// Take the strips off every taskbar and show the tray icon instead, as when the taskbar auto-hides (or
-/// put them back). Until the app quits.
+/// put them back): the "Show as a tray icon" setting.
 pub fn set_tray_only(on: bool) {
     TRAY_ONLY.store(on, Ordering::SeqCst);
     #[cfg(windows)]
@@ -132,12 +190,14 @@ mod win {
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
     use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        RegisterHotKey, TrackMouseEvent, UnregisterHotKey, MOD_NOREPEAT, TME_LEAVE, TRACKMOUSEEVENT,
+    };
     use windows_sys::Win32::UI::Shell::{SHAppBarMessage, ABM_GETSTATE, ABS_AUTOHIDE, APPBARDATA};
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-    use super::{background, line_tops, premultiply, rebar_width, strip_left, text_colour, widget_lines,
-                CLOCK_LINE_PITCH, STRIPS, TRAY_ONLY, TRAY_SHOWN};
+    use super::{background, line_tops, parse_hotkey, premultiply, rebar_width, strip_left, text_colour, widget_lines,
+                Hotkey, CLOCK_LINE_PITCH, STRIPS, TRAY_ONLY, TRAY_SHOWN};
     use crate::store::Store;
     use crate::time::now;
     use crate::tray::{self, Area};
@@ -304,8 +364,23 @@ mod win {
         }
     }
 
+    /// The taskbar's theme as last read: 0 not read yet, 1 light, 2 dark. Read again after WM_SETTINGCHANGE,
+    /// rather than from the registry on every once-a-second repaint.
+    static THEME: AtomicU32 = AtomicU32::new(0);
+
     /// Whether the taskbar uses the light theme.
     fn light_taskbar() -> bool {
+        match THEME.load(Ordering::Relaxed) {
+            1 => return true,
+            2 => return false,
+            _ => {}
+        }
+        let light = read_light_taskbar();
+        THEME.store(if light { 1 } else { 2 }, Ordering::Relaxed);
+        light
+    }
+
+    fn read_light_taskbar() -> bool {
         let (mut value, mut size) = (0u32, size_of::<u32>() as u32);
         let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
         let name = wide("SystemUsesLightTheme");
@@ -363,6 +438,38 @@ mod win {
             *w = Widget::default();
         });
         OWNER.store(0, Ordering::SeqCst);
+    }
+
+    const HOTKEY_ID: i32 = 1;
+    /// The shortcut registered now (as written in Settings), to put back after a failed change or a pause.
+    static HOTKEY: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+    fn register(hotkey: Option<Hotkey>) -> bool {
+        let owner = hwnd(OWNER.load(Ordering::SeqCst));
+        unsafe { UnregisterHotKey(owner, HOTKEY_ID) };
+        hotkey.is_none_or(|k| unsafe { RegisterHotKey(owner, HOTKEY_ID, k.mods | MOD_NOREPEAT, k.vk) } != 0)
+    }
+
+    /// Use this keyboard shortcut ("" for none) to open and close the popup from anywhere. If Windows won't
+    /// have it (another app uses it), the previous one is kept. Main thread only.
+    pub fn set_hotkey(text: &str) -> Result<(), String> {
+        let hotkey = parse_hotkey(text)?;
+        if OWNER.load(Ordering::SeqCst) == 0 {
+            return Err("The shortcut can't be used: the app's hidden window is missing.".into());
+        }
+        let mut current = HOTKEY.lock().unwrap();
+        if register(hotkey) {
+            *current = text.trim().to_string();
+            return Ok(());
+        }
+        register(parse_hotkey(&current).ok().flatten()); // keep the one that worked
+        Err(format!("{} is already used by another app. Try a different one.", text.trim()))
+    }
+
+    /// While Settings records a new shortcut, the current one is let go, so pressing it again reaches the popup.
+    pub fn suspend_hotkey(suspended: bool) {
+        let current = HOTKEY.lock().unwrap().clone();
+        register(if suspended { None } else { parse_hotkey(&current).ok().flatten() });
     }
 
     /// Re-place and repaint the strips now rather than on the next tick.
@@ -559,6 +666,17 @@ mod win {
         if message == WM_TIMER || (taskbar_created != 0 && message == taskbar_created) {
             tick();
             return 0;
+        }
+        if message == WM_HOTKEY {
+            if let Some(app) = APP.get() {
+                tray::toggle_popup(app);
+            }
+            return 0;
+        }
+        if message == WM_SETTINGCHANGE {
+            THEME.store(0, Ordering::Relaxed); // light or dark may have changed: read it on the next paint
+            tick();
+            return unsafe { DefWindowProcW(window, message, wparam, lparam) };
         }
         match message {
             SHOW_MENU => show_menu(),

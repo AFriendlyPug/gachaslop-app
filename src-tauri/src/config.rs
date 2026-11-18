@@ -67,8 +67,18 @@ pub const UPDATE_RETRY: i64 = 2 * HOUR;
 pub const UPDATE_START_DELAY: i64 = 10 * MINUTE;
 pub const RELEASES_PAGE: &str = "https://github.com/AFriendlyPug/gachaslop-app/releases";
 
-/// Custom game icons: largest file accepted.
+/// With "Free memory when closed", the popup's web view is destroyed this long after it was closed (it
+/// takes most of the app's memory) and built again when next opened.
+pub const FREE_POPUP_AFTER: u64 = 30;
+/// The popup's height (logical pixels): it fits the home view's sections (dropdowns counted closed; other
+/// views keep that height and scroll), never shorter
+/// than this, nor taller than the screen less a margin.
+pub const MIN_POPUP_HEIGHT: u32 = 220;
+
+/// Custom game icons: largest file accepted (the popup turns every picked image into a 128px PNG first), and
+/// the largest image downloaded from a link.
 pub const MAX_ICON_BYTES: usize = 1_000_000;
+pub const MAX_ICON_DOWNLOAD_BYTES: u32 = 10_000_000;
 pub const MAX_GAME_NAME: usize = 40;
 pub const MAX_HEADSUP_MINUTES: u32 = 720;
 

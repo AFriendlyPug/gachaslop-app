@@ -2,6 +2,13 @@
 // All times are Unix seconds (UTC); src/lib/time.ts shows them in the PC's own time zone.
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
+/** Which notifications one game sends, on top of the switches for all games. */
+export interface Alerts {
+  resets: boolean;
+  headsup: boolean;
+  banners: boolean;
+}
+
 export interface Settings {
   disabledGames: string[];
   resetToasts: boolean;
@@ -11,6 +18,11 @@ export interface Settings {
   offline: boolean;
   autostart: boolean;
   updateChecks: boolean; // look for a new version once a day (never installs by itself)
+  trayIcon: boolean; // a tray icon instead of the taskbar widget
+  gameAlerts: Record<string, Alerts>; // per game; a game not listed gets everything
+  hotkeyOn: boolean; // the keyboard shortcut is off unless turned on
+  hotkey: string; // the shortcut that opens and closes the popup, e.g. "Ctrl+Alt+G"
+  freeMemory: boolean; // destroy the popup's web view a while after it's closed
 }
 
 export interface GameView {
@@ -21,7 +33,9 @@ export interface GameView {
   icon: string | null;
   hour: number; // daily reset, UTC
   minute: number;
-  weeklyDay: number | null; // 0 = Monday .. 6 = Sunday, UTC
+  weeklyDay: number | null; // 0 = Monday .. 6 = Sunday, UTC (or in `zone`)
+  zone: string | null; // a Windows time zone id the reset times are in; null for UTC
+  zoneName: string | null; // its name as Windows shows it
   feed: string | null;
   builtin: boolean;
   iconPath: string | null;
@@ -80,11 +94,13 @@ export interface UpdateView {
   size: number;
   sha256: string | null;
   published: number | null;
+  notes: string; // what's new, Markdown from CHANGELOG.md
   dismissed: boolean; // "Not now" on its banner
 }
 
 export interface Snapshot {
   version: string; // this build's
+  hotkeyProblem: string | null; // why the saved shortcut couldn't be set at startup
   update: UpdateView | null;
   updateChecked: number | null;
   now: number;
@@ -108,9 +124,16 @@ export interface Diagnostics {
 
 export interface GameInput {
   name: string;
-  hour: number; // UTC
+  hour: number; // UTC, or in `zone`
   minute: number;
   weeklyDay: number | null;
+  zone: string | null;
+}
+
+/** A time zone a custom game can follow (Windows' id and display name). */
+export interface Zone {
+  id: string;
+  name: string;
 }
 
 export interface ResetPreview {
@@ -131,17 +154,21 @@ export const api = {
   markNoticesRead: () => invoke<void>("mark_notices_read"),
   clearNotices: () => invoke<void>("clear_notices"),
   setDialogOpen: (open: boolean) => invoke<void>("set_dialog_open", { open }),
+  /** Let go of the current shortcut while a new one is being recorded. */
+  suspendHotkey: (suspended: boolean) => invoke<void>("suspend_hotkey", { suspended }),
   /** Send a picked image's bytes; returns the staged file's path. */
   stageGameIcon: (bytes: Uint8Array) => invoke<string>("stage_game_icon", bytes),
   discardStaged: () => invoke<void>("discard_staged"),
+  /** Download an image from a link (HTTPS); its bytes, for the popup to turn into an icon. */
+  fetchIcon: (url: string) => invoke<ArrayBuffer>("fetch_icon", { url }),
   addGame: (game: GameInput, icon: string | null) => invoke<void>("add_game", { game, icon }),
   updateGame: (id: string, game: GameInput, icon: string | null, clearIcon: boolean) =>
     invoke<void>("update_game", { id, game, icon, clearIcon }),
   deleteGame: (id: string) => invoke<void>("delete_game", { id }),
   previewReset: (game: GameInput) => invoke<ResetPreview>("preview_reset", { game }),
+  timeZones: () => invoke<Zone[]>("list_time_zones"),
   testNotification: (sample: Sample) => invoke<string>("test_notification", { sample }),
   replayCatchup: () => invoke<void>("replay_catchup"),
-  setTrayOnly: (on: boolean) => invoke<void>("set_tray_only", { on }),
   diagnostics: () => invoke<Diagnostics>("diagnostics"),
   openPath: (what: "data" | "log" | "release") => invoke<void>("open_path", { what }),
   checkForUpdate: () => invoke<string>("check_for_update"),
@@ -149,5 +176,9 @@ export const api = {
   installUpdate: () => invoke<void>("install_update"),
   dismissUpdate: () => invoke<void>("dismiss_update"),
   hide: () => invoke<void>("hide_popup"),
+  /** The height (CSS pixels) the popup's sections need, with dropdowns closed. */
+  fitPopup: (height: number) => invoke<void>("fit_popup", { height }),
+  /** The view the popup was asked to open on before it existed ("settings"), if any. */
+  takeView: () => invoke<"settings" | null>("take_view"),
   quit: () => invoke<void>("quit"),
 };

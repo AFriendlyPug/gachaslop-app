@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onDestroy, untrack } from "svelte";
-  import { api, fileUrl, type GameInput, type GameView, type ResetPreview } from "../lib/api";
-  import { localDate, until, utcToLocal, WEEKDAYS } from "../lib/time";
+  import { onDestroy, onMount, untrack } from "svelte";
+  import { api, fileUrl, type GameInput, type GameView, type ResetPreview, type Zone } from "../lib/api";
+  import { toIconPng } from "../lib/icon";
+  import { clock, localDate, until, utcToLocal, WEEKDAYS } from "../lib/time";
   import GameBadge from "./GameBadge.svelte";
 
   let { game, onDone }: { game: GameView | null; onDone: () => void } = $props();
@@ -12,6 +13,11 @@
   let name = $state(start?.name ?? "");
   let time = $state(start ? `${pad(start.hour)}:${pad(start.minute)}` : "04:00");
   let weekly = $state<string>(start?.weeklyDay == null ? "" : String(start.weeklyDay));
+  let zone = $state<string>(start?.zone ?? ""); // "" = UTC
+  let zones = $state<Zone[]>([]);
+  onMount(() => api.timeZones().then((z) => (zones = z)));
+  const zoneName = $derived(zones.find((z) => z.id === zone)?.name ?? zone);
+  const where = $derived(zone ? "in that time zone" : "UTC");
   let staged = $state<string | null>(null); // path of a picked image, not saved yet
   let clearIcon = $state(false);
   let preview = $state<ResetPreview | null>(null);
@@ -26,6 +32,7 @@
     hour: Number(time.split(":")[0] ?? 0),
     minute: Number(time.split(":")[1] ?? 0),
     weeklyDay: weekly === "" ? null : Number(weekly),
+    zone: zone || null,
   });
 
   // what the badge shows: a picked image, nothing (after Remove), or the saved icon
@@ -51,15 +58,37 @@
     picker.click();
   }
 
+  // any image becomes a 128px PNG (see lib/icon.ts), then is staged until the game is saved
+  async function useImage(image: Blob) {
+    staged = await api.stageGameIcon(await toIconPng(image));
+    clearIcon = false;
+  }
+
   async function picked() {
     await api.setDialogOpen(false);
     const file = picker.files?.[0];
     if (!file) return;
+    error = "";
     try {
-      staged = await api.stageGameIcon(new Uint8Array(await file.arrayBuffer()));
-      clearIcon = false;
+      await useImage(file);
     } catch (e) {
-      error = String(e);
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  let link = $state("");
+  let fetching = $state(false);
+
+  async function download() {
+    error = "";
+    fetching = true;
+    try {
+      await useImage(new Blob([await api.fetchIcon(link)]));
+      link = "";
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      fetching = false;
     }
   }
 
@@ -93,19 +122,33 @@
       {#if staged || (start?.iconPath && !clearIcon)}
         <button type="button" class="link" onclick={() => { staged = null; clearIcon = true; api.discardStaged(); }}>Remove</button>
       {/if}
-      <input bind:this={picker} type="file" accept=".png,.jpg,.jpeg,.webp" hidden
+      <input bind:this={picker} type="file" accept="image/*" hidden
              onchange={picked} oncancel={() => api.setDialogOpen(false)} />
     </div>
-    <span class="muted small">PNG, JPG or WebP, up to 1 MB. A copy is kept, so it works offline.</span>
+    <div class="row left">
+      <input class="grow" type="url" bind:value={link} placeholder="or paste an image link (https://…)"
+             aria-label="Image link" onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (link) download(); } }} />
+      <button type="button" disabled={!link.trim() || fetching} onclick={download}>{fetching ? "Getting…" : "Get"}</button>
+    </div>
+    <span class="muted small">Any image (PNG, JPG, WebP, GIF…). It's made into a square icon and a copy is kept, so it
+      works offline.</span>
   </div>
+
+  <label>
+    <span>Time zone of the reset</span>
+    <select bind:value={zone}>
+      <option value="">UTC (no daylight saving)</option>
+      {#each zones as z (z.id)}<option value={z.id}>{z.name}</option>{/each}
+    </select>
+  </label>
 
   <div class="row two">
     <label>
-      <span>Daily reset (UTC)</span>
+      <span>Daily reset ({where})</span>
       <input type="time" bind:value={time} required />
     </label>
     <label>
-      <span>Weekly reset (UTC day)</span>
+      <span>Weekly reset ({where === "UTC" ? "UTC day" : "day there"})</span>
       <select bind:value={weekly}>
         <option value="">None</option>
         {#each WEEKDAYS as day, i (day)}<option value={String(i)}>{day}</option>{/each}
@@ -115,12 +158,18 @@
 
   {#if preview}
     <p class="card small">
-      {pad(input.hour)}:{pad(input.minute)} UTC is <strong>{utcToLocal(input.hour, input.minute, now)}</strong> your time.<br />
+      {#if zone}
+        {pad(input.hour)}:{pad(input.minute)} in {zoneName} is <strong>{clock(preview.nextReset)}</strong> your time
+        today, and follows its daylight saving.<br />
+      {:else}
+        {pad(input.hour)}:{pad(input.minute)} UTC is <strong>{utcToLocal(input.hour, input.minute, now)}</strong> your time.<br />
+      {/if}
       Next reset: {localDate(preview.nextReset)}, {until(preview.nextReset, now)}
       {#if preview.nextWeekly}<br />Next weekly: {localDate(preview.nextWeekly)}, {until(preview.nextWeekly, now)}{/if}
     </p>
   {/if}
-  <p class="muted small">If the game's reset moves with daylight saving, update its UTC time when the clocks change.</p>
+  <p class="muted small">If the game resets at a set time on its server, pick the server's time zone and the reset follows its
+    daylight saving by itself. Otherwise leave it on UTC.</p>
 
   {#if error}<p class="error">{error}</p>{/if}
 

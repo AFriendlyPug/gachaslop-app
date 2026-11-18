@@ -117,10 +117,13 @@ pub struct Plan {
 /// listing them a line each.
 pub fn plan(new: &[Event], settings: &Settings, running_since: Ts) -> Plan {
     let missed = |e: &Event| e.kind != Kind::HeadsUp && e.at < running_since - CATCHUP_AFTER;
-    let wanted = |e: &Event| match e.kind {
-        Kind::Reset | Kind::Weekly => settings.reset_toasts,
-        Kind::HeadsUp => true,
-        Kind::BannerLive | Kind::BannerEnding => settings.banner_toasts,
+    let wanted = |e: &Event| {
+        let game = settings.alerts(&e.game);
+        match e.kind {
+            Kind::Reset | Kind::Weekly => settings.reset_toasts && game.resets,
+            Kind::HeadsUp => game.headsup,
+            Kind::BannerLive | Kind::BannerEnding => settings.banner_toasts && game.banners,
+        }
     } && (settings.catchup || !missed(e));
     let shown: Vec<&Event> = new.iter().filter(|e| wanted(e)).collect();
     let pair = |e: &Event, kind| shown.iter().any(|o| o.kind == kind && o.game == e.game && o.at == e.at);
@@ -217,14 +220,23 @@ pub fn next_due(games: &[Game], feeds: &Feeds, settings: &Settings, now: Ts) -> 
     times.into_iter().filter(|t| *t > now).min().unwrap_or(now + TICK) // this second's pass has just run
 }
 
-/// Feeds to fetch now: due ones (or all not fetched in the last few minutes, after "Refresh banners"),
-/// only for games that are switched on, and none at all in offline mode.
+/// Feeds to fetch now: due ones (or, after "Refresh banners", all not fetched in the last few minutes; and
+/// the same for a game just switched back on), only for games that are switched on, none in offline mode.
 pub fn feeds_to_check(inner: &Inner, now: Ts, manual: bool) -> Vec<FeedKind> {
     if inner.settings.offline {
         return vec![];
     }
-    inner.enabled_feeds().into_iter()
-        .filter(|k| inner.feeds.get(*k).is_due(now) || (manual && !inner.feeds.get(*k).fresh(now))).collect()
+    inner.enabled_feeds().into_iter().filter(|k| {
+        let feed = inner.feeds.get(*k);
+        feed.is_due(now) || ((manual || inner.refresh_feeds.contains(k)) && !feed.fresh(now))
+    }).collect()
+}
+
+/// Whether requests for this feed may still be made: its game is on and the app isn't offline. Asked again
+/// before every request, so switching a game off stops the rest of a check.
+fn may_fetch(store: &Store, kind: FeedKind) -> bool {
+    let inner = store.lock();
+    !inner.settings.offline && inner.enabled_feeds().contains(&kind)
 }
 
 /// True if passes this far apart mean the PC slept (or the clock jumped) in between.
@@ -286,12 +298,17 @@ fn check_feeds(app: &AppHandle, store: &Store) {
         let mut inner = store.lock();
         let manual = std::mem::take(&mut inner.refresh_requested);
         let dropped = FeedKind::ALL.iter().fold(false, |d, k| inner.feeds.get_mut(*k).drop_ended(now) | d);
-        (feeds_to_check(&inner, now, manual), dropped)
+        let due = feeds_to_check(&inner, now, manual);
+        inner.refresh_feeds.clear();
+        (due, dropped)
     };
     if due.is_empty() && !dropped {
         return;
     }
     for kind in &due {
+        if !may_fetch(store, *kind) {
+            continue; // switched off (or offline) since this check started
+        }
         let result = banners::fetch(*kind);
         match &result {
             Ok(rots) => logs::info(format!("Fetched {} banners: {} stored", kind.key(), rots.len())),
@@ -303,8 +320,14 @@ fn check_feeds(app: &AppHandle, store: &Store) {
     }
     let dir = store.paths.icons();
     if !due.is_empty() {
-        let missing = missing_icons(&store.lock().feeds, &dir); // banners just fetched, and any that failed before
-        for icon in missing {
+        // banners just fetched, and any that failed before; only for games that are on
+        let enabled = store.lock().enabled_feeds();
+        let missing: Vec<_> = enabled.iter()
+            .flat_map(|k| missing_icons(&store.lock().feeds, &[*k], &dir).into_iter().map(move |i| (*k, i))).collect();
+        for (kind, icon) in missing {
+            if !may_fetch(store, kind) {
+                continue;
+            }
             let result = banners::download_icon(&dir, &icon);
             store.lock().state.count_request(crate::time::now());
             if let Err(err) = result {

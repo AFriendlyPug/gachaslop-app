@@ -1,11 +1,38 @@
 <script lang="ts">
-  import { api, type Diagnostics, type GameView, type Sample, type Settings, type Snapshot } from "../lib/api";
+  import { api, type Alerts, type Diagnostics, type GameView, type Sample, type Settings, type Snapshot } from "../lib/api";
   import { ago, resetText, until } from "../lib/time";
+  import { hotkeyFrom } from "../lib/hotkey";
   import GameBadge from "./GameBadge.svelte";
   import UpdateBanner from "./UpdateBanner.svelte";
 
   let { snap, now, onEdit }: { snap: Snapshot; now: number; onEdit: (game: GameView | null) => void } = $props();
   let error = $state("");
+  // ---- keyboard shortcut: off unless switched on; to change it, click it and press the keys (Esc keeps the old one) ----
+  let recording = $state(false);
+  let hotkeyError = $state("");
+
+  async function record(on: boolean) {
+    recording = on;
+    hotkeyError = "";
+    await api.suspendHotkey(on);
+  }
+
+  async function pressed(e: KeyboardEvent) {
+    if (!recording) return;
+    e.preventDefault();
+    e.stopPropagation(); // Esc here mustn't also close the popup
+    if (e.key === "Escape") return record(false);
+    const hotkey = hotkeyFrom(e);
+    if (hotkey === null) return; // only modifiers so far
+    recording = false;
+    try {
+      await api.saveSettings({ ...snap.settings, hotkey });
+    } catch (err) {
+      hotkeyError = String(err);
+      await api.suspendHotkey(false); // the old one stays
+    }
+  }
+
   let updateMessage = $state("");
   let checking = $state(false);
 
@@ -27,6 +54,13 @@
     } catch (e) {
       error = String(e);
     }
+  }
+
+  const ALL_ON: Alerts = { resets: true, headsup: true, banners: true };
+  const alertsFor = (key: string): Alerts => snap.settings.gameAlerts[key] ?? ALL_ON;
+  function toggleAlert(key: string, which: keyof Alerts) {
+    const current = alertsFor(key);
+    save({ gameAlerts: { ...snap.settings.gameAlerts, [key]: { ...current, [which]: !current[which] } } });
   }
 
   function toggleGame(key: string, on: boolean) {
@@ -91,7 +125,8 @@
         <GameBadge {game} small />
         <div class="grow">
           <div class="setting-name">{game.name}</div>
-          <div class="setting-hint">{resetText(game.hour, game.minute, game.weeklyDay, now)}{game.feed ? ". Shows banners." : ""}</div>
+          <div class="setting-hint">{resetText(game.hour, game.minute, game.weeklyDay, now,
+            game.zone ? { name: game.zoneName ?? game.zone, nextReset: game.nextReset } : null)}{game.feed ? ". Shows banners." : ""}</div>
           {#if !game.builtin}
             <div class="row left">
               <button class="link" onclick={() => onEdit(game)}>Edit</button>
@@ -124,6 +159,25 @@
                   (on) => save({ bannerToasts: on }))}
   {@render toggle("Catch-up", "Show what you missed while the app was closed or the PC was asleep.",
                   snap.settings.catchup, (on) => save({ catchup: on }))}
+  <h3>For each game</h3>
+  <p class="small muted">Turn off what you don't want from one game. The switches above still apply to all.</p>
+  <ul class="list">
+    {#each snap.games.filter((g) => g.enabled) as game (game.key)}
+      {@const alerts = alertsFor(game.key)}
+      <li class="game-alerts">
+        <GameBadge {game} small />
+        <span class="grow setting-name ellipsis">{game.name}</span>
+        <span class="chips">
+          <button class="chip" aria-pressed={alerts.resets} onclick={() => toggleAlert(game.key, "resets")}>Resets</button>
+          <button class="chip" aria-pressed={alerts.headsup} title={snap.settings.headsupMinutes ? undefined : "Heads-ups are off above"}
+                  onclick={() => toggleAlert(game.key, "headsup")}>Heads-up</button>
+          {#if game.feed}
+            <button class="chip" aria-pressed={alerts.banners} onclick={() => toggleAlert(game.key, "banners")}>Banners</button>
+          {/if}
+        </span>
+      </li>
+    {/each}
+  </ul>
 </section>
 
 <section class="group">
@@ -132,6 +186,42 @@
                   snap.settings.offline, (on) => save({ offline: on }))}
   {@render toggle("Start with Windows", "Starts on the taskbar when you sign in.", snap.settings.autostart,
                   (on) => save({ autostart: on }))}
+  <label class="setting">
+    <span class="grow">
+      <span class="setting-name block">Keyboard shortcut</span>
+      <span class="setting-hint block">Opens and closes this window from anywhere with {snap.settings.hotkey}.</span>
+    </span>
+    <input type="checkbox" class="switch" checked={snap.settings.hotkeyOn}
+           onchange={async (e) => {
+             hotkeyError = "";
+             try {
+               await api.saveSettings({ ...snap.settings, hotkeyOn: e.currentTarget.checked });
+             } catch (err) {
+               hotkeyError = String(err); // another app has it: stays off
+               e.currentTarget.checked = false;
+             }
+           }} />
+  </label>
+  {#if snap.settings.hotkeyOn}
+    <div class="setting">
+      <span class="grow">
+        <span class="setting-name block">Shortcut</span>
+        <span class="setting-hint block">{recording ? "Press the keys now. Esc to cancel." : "Click to change it."}</span>
+      </span>
+      <button class="kbd" class:recording onclick={() => record(!recording)} onkeydown={pressed}
+              onblur={() => recording && record(false)}>
+        {recording ? "Press keys…" : snap.settings.hotkey}
+      </button>
+    </div>
+  {/if}
+  {#if hotkeyError || (snap.settings.hotkeyOn && snap.hotkeyProblem)}
+    <p class="error">{hotkeyError || snap.hotkeyProblem}</p>
+  {/if}
+  {@render toggle("Free memory when closed",
+                  "Most of the app's memory is this window. Freeing it 30 seconds after closing makes it open a moment slower.",
+                  snap.settings.freeMemory, (on) => save({ freeMemory: on }))}
+  {@render toggle("Show as a tray icon", "In the notification area instead of the countdowns by the clock.",
+                  snap.settings.trayIcon, (on) => save({ trayIcon: on }))}
   {#if error}<p class="error">{error}</p>{/if}
 </section>
 
@@ -196,9 +286,7 @@
     <button onclick={() => tryIt(api.replayCatchup, "Replaying. Go back to see it under Notifications.")}>Replay catch-up</button>
   </div>
 
-  <h3>Taskbar</h3>
-  {@render toggle("Use the tray icon instead", "Try the fallback used when the taskbar auto-hides. Until the app quits.",
-                  diag?.widget.trayOnly ?? false, (on) => tryIt(() => api.setTrayOnly(on)))}
+  <h3>Taskbar widget</h3>
   {#if diag}
     <p class="small secondary">Widget: {widgetText(diag)}. Notifications remembered: {diag.remembered}.
       Banner icons stored: {diag.icons}.</p>

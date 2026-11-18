@@ -1,6 +1,6 @@
 [package]
 name = "gachaslop-app"
-version = "0.3.0"
+version = "0.0.0" # not used: the app's version is set in package.json
 description = "Tray app for gacha game resets and banners"
 authors = ["Reuben"]
 edition = "2024"
@@ -20,7 +20,7 @@ tauri-build = { version = "2", features = [] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tauri = { version = "2.12.6", features = ["tray-icon", "protocol-asset"] }
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_GdiPlus", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_GdiPlus", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Time", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse"] }
 
 # Small and fast: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

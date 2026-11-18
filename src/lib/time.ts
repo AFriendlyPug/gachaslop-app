@@ -97,10 +97,14 @@ export function utcToLocal(hour: number, minute: number, now: number): string {
   return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 }
 
-/** "Daily 19:00 UTC (20:00 your time)", plus the weekly day when there is one. */
-export function resetText(hour: number, minute: number, weeklyDay: number | null, now: number): string {
-  const daily = `Daily ${utcTime(hour, minute)} (${utcToLocal(hour, minute, now)} your time)`;
-  return weeklyDay === null ? daily : `${daily}, weekly on ${WEEKDAYS[weeklyDay]}s (UTC)`;
+/** "Daily 19:00 UTC (20:00 your time)", plus the weekly day when there is one. For a game in a time zone,
+ * "Daily 04:00 (UTC-08:00) Pacific Time (US & Canada) (12:00 your time)", using its next reset. */
+export function resetText(hour: number, minute: number, weeklyDay: number | null, now: number,
+                          zone: { name: string; nextReset: number } | null = null): string {
+  const daily = zone
+    ? `Daily ${pad(hour)}:${pad(minute)} ${zone.name} (${clock(zone.nextReset)} your time)`
+    : `Daily ${utcTime(hour, minute)} (${utcToLocal(hour, minute, now)} your time)`;
+  return weeklyDay === null ? daily : `${daily}, weekly on ${WEEKDAYS[weeklyDay]}s${zone ? " there" : " (UTC)"}`;
 }
 
 export const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];

@@ -11,7 +11,7 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrest-of-file";
 
 fn game(id: &str, icon: Option<&str>) -> CustomGame {
     CustomGame { id: id.into(), name: id.into(), icon: icon.map(String::from), hour: 11, minute: 0,
-                 weekly_day: Some(0), offset_minutes: 0 }
+                 weekly_day: Some(0), zone: None, offset_minutes: 0 }
 }
 
 fn files(dir: &std::path::Path) -> Vec<String> {

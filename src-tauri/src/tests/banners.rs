@@ -245,6 +245,17 @@ fn missing_icons_skips_files_already_present_and_duplicates() {
     feeds.ba.rotations = vec![rotation(FeedKind::Ba, now, now + DAY, "Have"),
                               rotation(FeedKind::Ba, now, now + 2 * DAY, "Need"),
                               rotation(FeedKind::Ba, now + 2 * DAY, now + 3 * DAY, "Need")];
-    let missing: Vec<_> = missing_icons(&feeds, &dir.0).into_iter().map(|i| i.file).collect();
+    let missing: Vec<_> = missing_icons(&feeds, &FeedKind::ALL, &dir.0).into_iter().map(|i| i.file).collect();
     assert_eq!(missing, ["ba/Need.png"]);
+}
+
+#[test]
+fn icons_are_only_fetched_for_the_feeds_asked_for() {
+    let dir = TempDir::new("icons-per-feed");
+    let now = utc(2026, 11, 18, 12, 0);
+    let mut feeds = Feeds::default();
+    feeds.ba.rotations = vec![rotation(FeedKind::Ba, now, now + DAY, "ba-1")];
+    feeds.zzz.rotations = vec![rotation(FeedKind::Zzz, now, now + DAY, "zzz-1")];
+    let only_zzz: Vec<_> = missing_icons(&feeds, &[FeedKind::Zzz], &dir.0).into_iter().map(|i| i.file).collect();
+    assert_eq!(only_zzz, ["zzz/zzz-1.png"]); // BA switched off: none of its icons
 }

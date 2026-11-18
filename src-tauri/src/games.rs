@@ -1,9 +1,11 @@
-//! The games (two built in, plus any the user adds) and the date maths for their resets. Every reset
-//! time is in UTC; the popup shows it in the PC's own time.
+//! The games (two built in, plus any the user adds) and the date maths for their resets. A reset time is
+//! in UTC, or for a custom game optionally in a server's time zone (following its daylight saving, see
+//! zones.rs); the popup shows it in the PC's own time.
 use serde::{Deserialize, Serialize};
 
 use crate::config::MAX_GAME_NAME;
-use crate::time::{start_of_day, weekday, Ts, DAY, HOUR, MINUTE};
+use crate::time::{weekday, Ts, DAY, HOUR, MINUTE};
+use crate::zones;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,9 +15,10 @@ pub struct Game {
     pub short: String,               // tray tooltip and summaries, e.g. "BA"
     pub color: String,               // badge colour when there is no icon
     pub icon: Option<String>,        // file name in the game-icons folder (custom games only)
-    pub hour: u32,                   // daily reset time, UTC
+    pub hour: u32,                   // daily reset time, UTC (or in `zone`)
     pub minute: u32,
-    pub weekly_day: Option<u32>,     // UTC day of the weekly reset (0 = Monday .. 6 = Sunday), at the daily time
+    pub weekly_day: Option<u32>,     // day of the weekly reset (0 = Monday .. 6 = Sunday), at the daily time
+    pub zone: Option<String>,        // a Windows time zone id the times are in; None for UTC
     pub feed: Option<String>,        // banner feed key, built-ins only
     pub builtin: bool,
 }
@@ -25,12 +28,12 @@ pub fn built_in() -> Vec<Game> {
     vec![
         Game {
             key: "ba".into(), name: "Blue Archive (Global)".into(), short: "BA".into(), color: "#3498db".into(),
-            icon: None, hour: 19, minute: 0, weekly_day: Some(6), feed: Some("ba".into()), builtin: true,
+            icon: None, hour: 19, minute: 0, weekly_day: Some(6), zone: None, feed: Some("ba".into()), builtin: true,
         },
         Game {
             // 04:00 on the EU server (UTC+1, no daylight saving)
             key: "zzz".into(), name: "Zenless Zone Zero (EU)".into(), short: "ZZZ".into(), color: "#f1c40f".into(),
-            icon: None, hour: 3, minute: 0, weekly_day: Some(0), feed: Some("zzz".into()), builtin: true,
+            icon: None, hour: 3, minute: 0, weekly_day: Some(0), zone: None, feed: Some("zzz".into()), builtin: true,
         },
     ]
 }
@@ -45,6 +48,9 @@ pub struct CustomGame {
     pub hour: u32,
     pub minute: u32,
     pub weekly_day: Option<u32>,
+    /// The server's time zone (a Windows zone id) the times are in, following its daylight saving; None for UTC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
     /// Only in files from before times were UTC: the server's offset the time was entered in.
     #[serde(default, skip_serializing)]
     pub offset_minutes: i32,
@@ -67,12 +73,12 @@ impl CustomGame {
         Game {
             key: self.id.clone(), name: self.name.clone(), short: self.name.clone(), color: "#8e8e93".into(),
             icon: self.icon.clone(), hour: self.hour, minute: self.minute, weekly_day: self.weekly_day,
-            feed: None, builtin: false,
+            zone: self.zone.clone(), feed: None, builtin: false,
         }
     }
 }
 
-/// What the add/edit form sends (times in UTC). The icon is handled separately.
+/// What the add/edit form sends (times in UTC, or in `zone`). The icon is handled separately.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameInput {
@@ -80,6 +86,8 @@ pub struct GameInput {
     pub hour: u32,
     pub minute: u32,
     pub weekly_day: Option<u32>,
+    #[serde(default)]
+    pub zone: Option<String>,
 }
 
 impl GameInput {
@@ -95,36 +103,56 @@ impl GameInput {
         if self.weekly_day.is_some_and(|d| d > 6) {
             return Err("The weekly reset day is not valid.".into());
         }
-        Ok(GameInput { name, ..self.clone() })
+        let zone = self.zone.as_deref().map(str::trim).filter(|z| !z.is_empty()).map(String::from);
+        if zone.as_deref().is_some_and(|z| !zones::exists(z)) {
+            return Err("That time zone isn't one Windows knows.".into());
+        }
+        Ok(GameInput { name, zone, ..self.clone() })
     }
+}
+
+/// The game's reset on a given day of its own calendar (days since 1970, in UTC or its zone).
+pub fn reset_on(game: &Game, day: i64) -> Ts {
+    match &game.zone {
+        Some(zone) => zones::local_to_utc(zone, day, game.hour, game.minute),
+        None => day * DAY + game.hour as i64 * HOUR + game.minute as i64 * MINUTE,
+    }
+}
+
+/// The days to try around `t`: a zone's offset moves a day's reset by up to about a day either way.
+fn days_around(t: Ts, before: i64, after: i64) -> std::ops::RangeInclusive<i64> {
+    t.div_euclid(DAY) - before..=t.div_euclid(DAY) + after
+}
+
+fn is_weekly_day(game: &Game, day: i64) -> bool {
+    game.weekly_day == Some(weekday(day * DAY))
 }
 
 /// Next reset strictly after `after`.
 pub fn next_reset(game: &Game, after: Ts) -> Ts {
-    let candidate = start_of_day(after) + game.hour as i64 * HOUR + game.minute as i64 * MINUTE;
-    if candidate <= after { candidate + DAY } else { candidate }
+    days_around(after, 2, 2).map(|d| reset_on(game, d)).find(|t| *t > after).unwrap_or(after + DAY)
 }
 
 /// The most recent reset at or before `at`.
 pub fn last_reset(game: &Game, at: Ts) -> Ts {
-    next_reset(game, at) - DAY
+    days_around(at, 2, 2).rev().map(|d| reset_on(game, d)).find(|t| *t <= at).unwrap_or(at - DAY)
 }
 
 /// Next weekly reset strictly after `after`, or None if the game has none.
 pub fn next_weekly(game: &Game, after: Ts) -> Option<Ts> {
-    let day = game.weekly_day?;
-    let next = next_reset(game, after); // the weekly reset is the first daily reset on weekly_day
-    Some(next + ((day + 7 - weekday(next)) % 7) as i64 * DAY)
+    game.weekly_day?;
+    days_around(after, 2, 9).filter(|d| is_weekly_day(game, *d)).map(|d| reset_on(game, d)).find(|t| *t > after)
 }
 
 /// The most recent weekly reset at or before `at`, or None if the game has none.
 pub fn last_weekly(game: &Game, at: Ts) -> Option<Ts> {
-    next_weekly(game, at).map(|w| w - 7 * DAY)
+    game.weekly_day?;
+    days_around(at, 9, 2).rev().filter(|d| is_weekly_day(game, *d)).map(|d| reset_on(game, d)).find(|t| *t <= at)
 }
 
 /// True if this daily reset moment is also the game's weekly reset.
 pub fn is_weekly_moment(game: &Game, at: Ts) -> bool {
-    game.weekly_day == Some(weekday(at))
+    days_around(at, 2, 2).any(|d| is_weekly_day(game, d) && reset_on(game, d) == at)
 }
 
 /// Games sorted by next reset, soonest first (ties keep list order).

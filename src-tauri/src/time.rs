@@ -42,11 +42,6 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
-/// Midnight UTC at the start of `t`'s day.
-pub fn start_of_day(t: Ts) -> Ts {
-    t.div_euclid(DAY) * DAY
-}
-
 /// Day of the week in UTC: 0 = Monday .. 6 = Sunday (1970-01-01 was a Thursday).
 pub fn weekday(t: Ts) -> u32 {
     (t.div_euclid(DAY) + 3).rem_euclid(7) as u32

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api, type UpdateView } from "../lib/api";
+  import { noteLines } from "../lib/notes";
   import { localDate } from "../lib/time";
 
   // A newer version is out. Nothing happens unless the user picks Install (or downloads it themselves).
@@ -21,6 +22,8 @@
   }
 
   const size = $derived(update.size ? ` (${(update.size / 1_000_000).toFixed(1)} MB)` : "");
+  const NOTES_SHOWN = 4; // the rest are a click away
+  const notes = $derived(noteLines(update.notes).filter((l) => l.kind !== "heading"));
 </script>
 
 <section class="card update-banner" aria-label="Update available">
@@ -33,10 +36,19 @@
     {installing ? "Downloading and checking the installer. GachaSlop will close and open again when it's done."
       : `Install downloads it${size}, checks it and updates in place; GachaSlop closes and opens again by itself.`}
   </p>
+  {#if notes.length}
+    <div class="update-notes">
+      <span class="small setting-name">What's new</span>
+      <ul>
+        {#each notes.slice(0, NOTES_SHOWN) as line, i (i)}<li class:plain={line.kind === "text"}>{line.text}</li>{/each}
+      </ul>
+      {#if notes.length > NOTES_SHOWN}<span class="small secondary">and more in the full notes</span>{/if}
+    </div>
+  {/if}
   <div class="buttons">
     <button class="primary" disabled={installing || offline} title={offline ? "Turn off offline mode first" : undefined}
             onclick={install}>{installing ? "Installing…" : "Install update"}</button>
-    <button onclick={() => api.openPath("release")}>What's new</button>
+    <button onclick={() => api.openPath("release")}>{notes.length ? "Full notes" : "What's new"}</button>
   </div>
   {#if error}<p class="error">{error}</p>{/if}
 </section>

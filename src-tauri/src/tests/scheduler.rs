@@ -128,7 +128,7 @@ fn first_run_and_a_new_game_produce_no_catch_up() {
     let mut state = State::default();
     seed(&mut state, &due_events(&games, &feeds, 0, now));
     let custom = CustomGame { id: "custom-1".into(), name: "Arknights".into(), icon: None, hour: 11, minute: 0,
-                              weekly_day: Some(0), offset_minutes: 0 }.to_game();
+                              weekly_day: Some(0), zone: None, offset_minutes: 0 }.to_game();
     seed(&mut state, &due_events(std::slice::from_ref(&custom), &feeds, 0, now));
     games.push(custom);
     let new: Vec<_> = due_events(&games, &feeds, 0, now + MINUTE).into_iter()
@@ -310,4 +310,39 @@ fn recording_notices_marks_when_they_came_in() {
     assert!(state.is_new(&state.notices[1]));
     state.read_at = Some(now + 5);
     assert!(!state.is_new(&state.notices[1]));
+}
+
+#[test]
+fn one_games_notifications_can_be_turned_off() {
+    use crate::settings::Alerts;
+    let games = built_in();
+    let new = new_after(&games, &Feeds::default(), utc(2026, 11, 18, 20, 0), utc(2026, 11, 21, 20, 0));
+    let mut settings = Settings::default();
+    settings.game_alerts.insert("ba".into(), Alerts { resets: false, ..Alerts::default() });
+    let shown = plan(&new, &settings, utc(2026, 11, 21, 20, 0));
+    let games_shown: Vec<_> = shown.notices.iter().map(|n| n.game.as_str()).collect();
+    assert_eq!(games_shown, ["zzz"]); // BA's reset is off for BA only
+    // the switch for all games still applies on top
+    let all_off = Settings { reset_toasts: false, ..Settings::default() };
+    assert!(plan(&new, &all_off, utc(2026, 11, 21, 20, 0)).notices.is_empty());
+}
+
+#[test]
+fn a_game_switched_back_on_is_checked_once_unless_just_fetched() {
+    let now = utc(2026, 11, 18, 12, 0);
+    let mut feeds = Feeds::default();
+    for kind in FeedKind::ALL {
+        let rot = rotation(kind, now - DAY, now + 5 * DAY, "S");
+        feeds.get_mut(kind).record(kind, Ok(vec![rot]), now - HOUR); // fetched an hour ago, next check in days
+    }
+    let mut back = inner(Settings::default(), feeds);
+    assert_eq!(feeds_to_check(&back, now, false), []); // nothing due
+    back.refresh_feeds = vec![FeedKind::Zzz]; // ZZZ was just switched back on
+    assert_eq!(feeds_to_check(&back, now, false), [FeedKind::Zzz]); // only it, as "Refresh banners" would
+    back.feeds.zzz.fetched_at = Some(now - MINUTE); // fetched a minute ago: not again
+    assert_eq!(feeds_to_check(&back, now, false), []);
+    let mut off = back;
+    off.settings.disabled_games = vec!["zzz".into()]; // switched off again before the check ran
+    off.feeds.zzz.fetched_at = Some(now - HOUR);
+    assert_eq!(feeds_to_check(&off, now, false), []);
 }
