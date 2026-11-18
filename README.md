@@ -2,32 +2,36 @@
 
 A small Windows app that counts down to game resets and shows the current and upcoming banners for Blue Archive and Zenless Zone Zero. It sits on the taskbar next to the clock, showing the next two resets (`BA 02:15:07`, `ZZZ 10:15:07`); click it for the popup, right-click for the menu. Small cards pop up above it when a game resets or a banner goes live.
 
-<p align="center">
-  <img src="docs/screenshots/popup-dark.png" width="340" alt="The popup in dark mode: Blue Archive and Zenless Zone Zero cards with daily and weekly reset countdowns and the current banners">
-  &nbsp;
-  <img src="docs/screenshots/popup-light.png" width="340" alt="The same popup in light mode">
-</p>
+<table align="center">
+  <tr>
+    <td align="center"><img src="docs/screenshots/popup-dark.png" width="190" alt="The popup in dark mode: Blue Archive and Zenless Zone Zero cards with daily and weekly reset countdowns and the current banners"></td>
+    <td align="center"><img src="docs/screenshots/popup-light.png" width="190" alt="The same popup in light mode"></td>
+    <td align="center"><img src="docs/screenshots/upcoming.png" width="190" alt="Upcoming banners opened into a timeline: each banner's start date, length and characters"></td>
+    <td align="center"><img src="docs/screenshots/settings.png" width="190" alt="Settings: games with their reset times, and notification switches with a line explaining each"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Resets and banners</b></sub></td>
+    <td align="center"><sub><b>Light mode</b></sub></td>
+    <td align="center"><sub><b>Upcoming timeline</b></sub></td>
+    <td align="center"><sub><b>Settings</b></sub></td>
+  </tr>
+</table>
 
-## Screenshots
+<table align="center">
+  <tr>
+    <td><img src="docs/screenshots/cards.png" width="408" alt="Three notification cards: Blue Archive (Global) has reset; New Blue Archive banner listing Ibuki, Neru, Rio and Iroha; While you were away, listing missed resets one per line"></td>
+    <td width="300">
+      <b>Notification cards</b><br>
+      <sub>Appear above the taskbar widget (or beside the popup) and fade after a few seconds. Several at once become one card. These were made with the Testing buttons in Settings, hence "[Test]".</sub>
+      <br><br>
+      <b>On the taskbar</b><br>
+      <img src="docs/screenshots/widget.png" width="82" alt="Taskbar widget showing BA 13:53:52 and ZZZ 21:53:52"><br>
+      <sub>Just left of the clock: the next two resets. Click for the popup, right-click for the menu.</sub>
+    </td>
+  </tr>
+</table>
 
-**On the taskbar**, just left of the clock, the next two resets tick down. Click for the popup, right-click for the menu.
-
-<img src="docs/screenshots/widget.png" width="164" alt="Taskbar widget showing BA 14:02:34 and ZZZ 22:02:34">
-
-**Notification cards** appear above the widget (or beside the popup), with the game's icon, then fade after a few seconds. Several at once become one card. These were made with the Testing buttons in Settings, hence "[Test]".
-
-<p>
-  <img src="docs/screenshots/card-reset.png" width="392" alt="Card: Blue Archive (Global) has reset. Reset 9h 58m ago. Next reset in 14h 3m.">
-  <img src="docs/screenshots/card-banner.png" width="392" alt="Card: New Blue Archive banner, listing Ibuki, Neru, Rio and Iroha with when it ends">
-  <img src="docs/screenshots/card-summary.png" width="392" alt="Card: While you were away, listing missed resets one per line">
-</p>
-
-| Upcoming banners | Settings |
-|---|---|
-| <img src="docs/screenshots/upcoming.png" width="340" alt="Upcoming banners opened into a timeline: each banner's start date, length and characters"> | <img src="docs/screenshots/settings.png" width="340" alt="Settings: games with their reset times, and notification switches with a line explaining each"> |
-| Closed, it previews the next banner; open, it's a timeline of every announced one. | Every setting says what it does. A Testing section at the bottom tries notifications and catch-up on demand. |
-
-Screenshots taken on 18 November 2026 with the banner data stored at the time.
+<p align="center"><sub>Screenshots taken on 18 November 2026 with the banner data stored at the time.</sub></p>
 
 ## Features
 
