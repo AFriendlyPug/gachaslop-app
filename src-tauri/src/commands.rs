@@ -12,7 +12,7 @@ use crate::banners::{data_runs_out, image_ext, is_image, mark_words, write_atomi
 use crate::config::MAX_ICON_BYTES;
 use crate::games::{next_reset, next_weekly, CustomGame, Game, GameInput};
 use crate::scheduler::{due_events, forget, sample_toast, seed, Sample};
-use crate::settings::{Missed, Paths, Settings};
+use crate::settings::{Notice, Paths, Settings};
 use crate::store::{Inner, Store};
 use crate::time::{now, now_millis, Ts};
 use crate::toast;
@@ -72,13 +72,21 @@ pub struct FeedView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NoticeView {
+    #[serde(flatten)]
+    notice: Notice,
+    new: bool, // came in since the Notifications list was last opened
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     now: Ts,
     games: Vec<GameView>,
     feeds: Vec<FeedView>,
     settings: Settings,
-    missed_since: Option<Ts>,
-    missed: Vec<Missed>,
+    notices: Vec<NoticeView>, // newest first
+    new_notices: usize,
     requests_this_month: u32,
 }
 
@@ -123,9 +131,13 @@ fn snapshot(paths: &Paths, inner: &Inner) -> Snapshot {
             }).collect(),
         }
     }).collect();
+    let mut notices: Vec<NoticeView> = inner.state.notices.iter()
+        .map(|n| NoticeView { notice: n.clone(), new: inner.state.is_new(n) }).collect();
+    notices.sort_by_key(|v| std::cmp::Reverse((v.notice.at, v.notice.added)));
+    let new_notices = notices.iter().filter(|v| v.new).count();
     Snapshot {
-        now, games, feeds, settings: inner.settings.clone(), missed_since: inner.state.missed_since,
-        missed: inner.state.missed.clone(), requests_this_month: inner.state.requests_this_month(now),
+        now, games, feeds, settings: inner.settings.clone(), notices, new_notices,
+        requests_this_month: inner.state.requests_this_month(now),
     }
 }
 
@@ -142,7 +154,7 @@ pub(crate) fn remove_custom_game(inner: &mut Inner, id: &str) -> Option<CustomGa
     let game = inner.custom.remove(index);
     let tag = format!(":{id}:");
     inner.state.notified.retain(|key, _| !key.contains(&tag));
-    inner.state.missed.retain(|m| m.game != id);
+    inner.state.notices.retain(|n| n.game != id);
     inner.settings.disabled_games.retain(|k| k != id);
     Some(game)
 }
@@ -242,10 +254,20 @@ pub fn refresh_banners(store: Store_<'_>) -> String {
     "Checking for new banners…".into()
 }
 
+/// The Notifications list was opened: everything in it has now been seen.
 #[tauri::command]
-pub fn dismiss_missed(app: AppHandle, store: Store_<'_>) {
+pub fn mark_notices_read(app: AppHandle, store: Store_<'_>) {
     let mut inner = store.lock();
-    (inner.state.missed, inner.state.missed_since, inner.state.unseen) = (vec![], None, false);
+    (inner.state.read_at, inner.state.unseen) = (Some(now()), false);
+    store.save_state(&inner);
+    drop(inner);
+    changed(&app, &store);
+}
+
+#[tauri::command]
+pub fn clear_notices(app: AppHandle, store: Store_<'_>) {
+    let mut inner = store.lock();
+    (inner.state.notices, inner.state.unseen) = (vec![], false);
     store.save_state(&inner);
     drop(inner);
     changed(&app, &store);
@@ -373,8 +395,8 @@ pub fn test_notification(app: AppHandle, store: Store_<'_>, sample: Sample) -> S
     "Shown beside this window.".into()
 }
 
-/// Show everything currently due again, as missed: its toasts (or a summary), the "While you were away"
-/// card and the red dot on the widget. Uses the real scheduler pass, so the notification settings apply.
+/// Show everything currently due again, as missed: its cards (or a summary), new entries in the
+/// Notifications list and the red dot on the widget. Uses the real scheduler pass, so the notification settings apply.
 #[tauri::command]
 pub fn replay_catchup(store: Store_<'_>) {
     let mut inner = store.lock();

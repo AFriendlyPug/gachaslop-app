@@ -1,6 +1,7 @@
 //! Saved settings and state: defaults, old files, request counts.
 use super::{utc, TempDir};
 use crate::settings::*;
+use crate::time::DAY;
 
 #[test]
 fn old_or_partial_files_still_load() {
@@ -60,4 +61,27 @@ fn load_all_moves_old_custom_games_to_utc() {
     let saved = load_all(&paths);
     assert_eq!((saved.custom[0].hour, saved.custom[0].weekly_day, saved.custom[0].offset_minutes), (3, Some(0), 0));
     assert_eq!(saved.settings, Settings::default());
+}
+
+#[test]
+fn old_missed_items_become_missed_notices() {
+    let old = r#"{"initialised": true, "missedSince": 5, "missed": [{"at": 100, "game": "ba", "text": "BA daily reset"}]}"#;
+    let state = serde_json::from_str::<State>(old).unwrap().upgrade();
+    assert_eq!(state.notices, [Notice { at: 100, added: 100, game: "ba".into(), title: "BA daily reset".into(),
+                                        body: String::new(), missed: true }]);
+    assert!(!serde_json::to_string(&state).unwrap().contains("\"missed\":[")); // not saved the old way again
+}
+
+#[test]
+fn the_notifications_list_is_kept_for_a_month_and_capped() {
+    let now = utc(2026, 11, 18, 12, 0);
+    let notice = |added| Notice { at: added, added, game: "ba".into(), title: "Reset".into(), body: String::new(),
+                                  missed: false };
+    let mut notices = vec![notice(now - 31 * DAY), notice(now - 29 * DAY)];
+    keep_notices(&mut notices, now);
+    assert_eq!(notices, [notice(now - 29 * DAY)]);
+    let mut many: Vec<Notice> = (0..250).map(|i| notice(now - 250 + i)).collect();
+    keep_notices(&mut many, now);
+    assert_eq!(many.len(), 200);
+    assert_eq!(many[0].added, now - 200); // the oldest went first
 }

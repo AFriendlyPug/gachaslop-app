@@ -2,7 +2,7 @@
 // Each test sets the time zone it needs, so results don't depend on the PC running them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ago, countdown, fmtDuration, lasts, left, localDate, roughlyUntil, localTime, resetText, until, utcTime, utcToLocal }
+import { ago, clock, countdown, dayLabel, fmtDuration, lasts, left, localDate, roughlyUntil, localTime, resetText, until, utcTime, utcToLocal }
   from "../src/lib/time.ts";
 
 const MIN = 60_000;
@@ -97,4 +97,17 @@ test("rough countdown for banners days away", () => {
   assert.equal(roughlyUntil(now / 1000 + 5 * 86_400 + 21 * 3600 + 28 * 60, now), "in 5d 21h");
   assert.equal(roughlyUntil(now / 1000 + 3 * 3600 + 5 * 60, now), "in 3h 5m");
   assert.equal(roughlyUntil(now / 1000 - 10, now), "now");
+});
+
+test("notifications are grouped by local day", () => {
+  inZone("Europe/London", () => {
+    const now = Date.UTC(2026, 10, 18, 12, 0);
+    assert.equal(dayLabel(utc(2026, 11, 18, 0, 30), now), "Today");
+    assert.equal(dayLabel(utc(2026, 11, 17, 23, 59), now), "Yesterday");
+    assert.equal(dayLabel(utc(2026, 11, 16, 19), now), "Mon 16 Nov");
+    assert.equal(clock(utc(2026, 11, 16, 19)), "19:00");
+  });
+  inZone("Asia/Tokyo", () => { // 23:30 UTC on the 17th is already the 18th in Tokyo
+    assert.equal(dayLabel(utc(2026, 11, 17, 23, 30), Date.UTC(2026, 10, 18, 3, 0)), "Today");
+  });
 });

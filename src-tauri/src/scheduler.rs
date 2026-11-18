@@ -5,10 +5,10 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
 use crate::banners::{self, mark_words, missing_icons, prune_icons, FeedKind, Feeds};
-use crate::config::{CATCHUP_AFTER, ENDING_WARNING, HEARTBEAT, MAX_MISSED, RESET_KEY_KEEP, SUMMARY_FROM, TICK, WAKE_GAP};
+use crate::config::{CATCHUP_AFTER, ENDING_WARNING, HEARTBEAT, RESET_KEY_KEEP, SUMMARY_FROM, TICK, WAKE_GAP};
 use crate::games::{is_weekly_moment, last_reset, last_weekly, next_reset, Game};
 use crate::logs;
-use crate::settings::{Missed, Settings, State};
+use crate::settings::{keep_notices, Notice, Settings, State};
 use crate::store::{Inner, Store};
 use crate::time::{fmt_duration, now, Ts, DAY, MINUTE};
 use crate::toast::{self, Card};
@@ -106,11 +106,11 @@ pub fn seed(state: &mut State, events: &[Event]) {
 #[derive(Debug, Default, PartialEq)]
 pub struct Plan {
     pub toasts: Vec<Card>,
-    pub missed: Vec<Missed>,
+    pub notices: Vec<Notice>, // one for each thing shown, for the Notifications list (`added` set by record)
 }
 
 /// Turn new events into toasts. An event from before `running_since` (when the app last started or woke)
-/// happened while it wasn't running: it is "missed", and also goes on the "While you were away" card.
+/// happened while it wasn't running: it is "missed", and is marked so in the Notifications list.
 /// A daily and weekly reset at the same moment become one toast; three or more become one summary card
 /// listing them a line each.
 pub fn plan(new: &[Event], settings: &Settings, running_since: Ts) -> Plan {
@@ -140,9 +140,17 @@ pub fn plan(new: &[Event], settings: &Settings, running_since: Ts) -> Plan {
     } else {
         items.iter().map(|(t, b, _, e)| Card::new(Some(&e.game), t.clone(), b.clone())).collect()
     };
-    let missed = items.iter().filter(|(.., e)| missed(e))
-        .map(|(_, _, summary, e)| Missed { at: e.at, game: e.game.clone(), text: summary.clone() }).collect();
-    Plan { toasts, missed }
+    let notices = items.iter().map(|(title, body, _, e)| Notice {
+        at: e.at, added: 0, game: e.game.clone(), title: title.clone(), body: body.clone(), missed: missed(e),
+    }).collect();
+    Plan { toasts, notices }
+}
+
+/// Add a plan's notices to the Notifications list, as noticed `now`. Anything missed lights the widget's dot.
+pub fn record(state: &mut State, notices: Vec<Notice>, now: Ts) {
+    state.unseen |= notices.iter().any(|n| n.missed);
+    state.notices.extend(notices.into_iter().map(|n| Notice { added: now, ..n }));
+    keep_notices(&mut state.notices, now);
 }
 
 /// The next moment something could become due: a reset, heads-up, banner change or feed check.
@@ -273,7 +281,7 @@ fn check_feeds(app: &AppHandle, store: &Store) {
 }
 
 /// Show toasts for anything new since the last pass, and record it all.
-fn notify(app: &AppHandle, store: &Store, running_since: Ts, away_since: Option<Ts>) {
+fn notify(app: &AppHandle, store: &Store, running_since: Ts) {
     let now = now();
     let mut inner = store.lock();
     let events = due_events(&inner.enabled_games(), &inner.feeds, inner.settings.headsup_minutes, now);
@@ -296,15 +304,7 @@ fn notify(app: &AppHandle, store: &Store, running_since: Ts, away_since: Option<
     }
     let plan = plan(&new, &inner.settings, running_since);
     seed(&mut inner.state, &new);
-    if !plan.missed.is_empty() {
-        if inner.state.missed.is_empty() {
-            inner.state.missed_since = away_since;
-        }
-        inner.state.missed.extend(plan.missed);
-        let extra = inner.state.missed.len().saturating_sub(MAX_MISSED);
-        inner.state.missed.drain(..extra);
-        inner.state.unseen = true;
-    }
+    record(&mut inner.state, plan.notices, now);
     store.save_state(&inner);
     drop(inner);
     for card in plan.toasts {
@@ -316,21 +316,19 @@ fn notify(app: &AppHandle, store: &Store, running_since: Ts, away_since: Option<
 /// The scheduler's loop, on its own thread.
 pub fn run(app: AppHandle, store: Arc<Store>) {
     let mut running_since = now();
-    let mut away_since = store.lock().state.last_seen; // when the app was last known to be running
     let mut last_pass = running_since;
     let mut last_heartbeat: Option<Ts> = None;
     loop {
         let start = now();
         if is_gap(last_pass, start) {
-            // the PC slept (or the clock jumped): anything since the last pass was missed
-            (running_since, away_since) = (start, Some(last_pass));
+            running_since = start; // the PC slept (or the clock jumped): anything since the last pass was missed
         }
         if std::mem::take(&mut store.lock().replay_catchup) {
-            (running_since, away_since) = (start, Some(start)); // as if the app had just started
+            running_since = start; // as if the app had just started
         }
         last_pass = start;
         check_feeds(&app, &store); // first, so a banner it finds joins the same catch-up
-        notify(&app, &store, running_since, away_since);
+        notify(&app, &store, running_since);
         tray::sync(&app, &store);
         let now = now();
         if last_heartbeat.is_none_or(|t| now - t >= HEARTBEAT) {

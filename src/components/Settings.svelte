@@ -156,9 +156,9 @@
 
   <h3>Catch-up</h3>
   <p class="small muted">Shows everything due now as if you'd just come back: its cards (following the settings above),
-    the "While you were away" list and the red dot on the widget.</p>
+    new entries in the Notifications list and the red dot on the widget.</p>
   <div class="buttons">
-    <button onclick={() => tryIt(api.replayCatchup, "Replaying. Go back to see the list.")}>Replay catch-up</button>
+    <button onclick={() => tryIt(api.replayCatchup, "Replaying. Go back to see it under Notifications.")}>Replay catch-up</button>
   </div>
 
   <h3>Taskbar</h3>

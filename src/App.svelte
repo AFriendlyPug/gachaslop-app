@@ -2,12 +2,13 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { api, type GameView, type Snapshot } from "./lib/api";
-  import { ago, localDate } from "./lib/time";
+  import { ago } from "./lib/time";
   import GameCard from "./components/GameCard.svelte";
   import Settings from "./components/Settings.svelte";
   import GameEditor from "./components/GameEditor.svelte";
+  import Notifications from "./components/Notifications.svelte";
 
-  type View = { name: "home" } | { name: "settings" } | { name: "edit"; game: GameView | null };
+  type View = { name: "home" } | { name: "settings" } | { name: "notifications" } | { name: "edit"; game: GameView | null };
 
   let snap = $state<Snapshot | null>(null);
   let view = $state<View>({ name: "home" });
@@ -44,10 +45,12 @@
   // one card per switched-on game, soonest reset first
   const cards = $derived((snap?.games.filter((g) => g.enabled) ?? []).sort((a, b) => a.nextReset - b.nextReset));
   const feedFor = (game: GameView) => snap?.feeds.find((f) => f.key === game.feed) ?? null;
-  const MISSED_SHOWN = 3; // keep the card short so the games still fit
+  // the home screen lists new notifications in full (a few, so the games still fit); once read, just the latest
+  const NEW_SHOWN = 3;
+  const fresh = $derived(snap?.notices.filter((n) => n.new) ?? []);
   const gameName = (key: string) => snap?.games.find((g) => g.key === key)?.short ?? key;
-  const title = $derived(view.name === "home" ? "GachaSlop" : view.name === "settings" ? "Settings"
-    : view.game ? "Edit game" : "Add a game");
+  const title = $derived({ home: "GachaSlop", settings: "Settings", notifications: "Notifications",
+    edit: view.name === "edit" && view.game ? "Edit game" : "Add a game" }[view.name]);
 </script>
 
 <main class="panel">
@@ -61,6 +64,14 @@
     {#if view.name === "home"}
       {#if snap?.settings.offline}<span class="pill warn" title="No network requests are made">Offline</span>{/if}
       <div class="actions">
+        <button class="icon bell" title="Notifications" aria-label={`Notifications${snap?.newNotices ? `, ${snap.newNotices} new` : ""}`}
+                onclick={() => (view = { name: "notifications" })}>
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" /><path d="M10 20.5a2 2 0 0 0 4 0" />
+          </svg>
+          {#if snap?.newNotices}<span class="count-badge">{snap.newNotices}</span>{/if}
+        </button>
         <button class="icon" title="Refresh banners" aria-label="Refresh banners"
                 disabled={snap?.settings.offline} onclick={refresh}>⟳</button>
         <button class="icon" title="Settings" aria-label="Settings" onclick={() => (view = { name: "settings" })}>⚙</button>
@@ -75,26 +86,34 @@
     {#if !snap}
       <p class="muted">Loading…</p>
     {:else if view.name === "home"}
-      {#if snap.missed.length}
-        <section class="card notice" aria-label="Missed while you were away">
-          <div class="row">
-            <h2>While you were away</h2>
-            <button class="link" onclick={() => api.dismissMissed()}>Dismiss</button>
-          </div>
-          {#if snap.missedSince}<p class="small muted">Since {localDate(snap.missedSince)}</p>{/if}
+      {#if fresh.length}
+        <button class="card notice-home" onclick={() => (view = { name: "notifications" })}>
+          <span class="row">
+            <span class="notice-head">Notifications <span class="pill">{fresh.length} new</span></span>
+            <span class="see-all">See all ›</span>
+          </span>
           <ul>
-            {#each snap.missed.slice(-MISSED_SHOWN).reverse() as m (m.at + m.text)}
+            {#each fresh.slice(0, NEW_SHOWN) as n (n.at + n.title + n.added)}
               <li>
-                <span class="pill">{gameName(m.game)}</span>
-                <span class="grow">{m.text}</span>
-                <span class="muted tiny">{ago(m.at, now)}</span>
+                <span class="pill">{gameName(n.game)}</span>
+                <span class="grow ellipsis">{n.title}</span>
+                {#if n.missed}<span class="tiny secondary">missed</span>{/if}
+                <span class="tiny muted">{ago(n.at, now)}</span>
               </li>
             {/each}
           </ul>
-          {#if snap.missed.length > MISSED_SHOWN}
-            <p class="small muted">and {snap.missed.length - MISSED_SHOWN} more</p>
+          {#if fresh.length > NEW_SHOWN}
+            <span class="small secondary">{fresh.length - NEW_SHOWN} more new in the list</span>
           {/if}
-        </section>
+        </button>
+      {:else if snap.notices.length}
+        {@const latest = snap.notices[0]}
+        <button class="card notice-home compact" onclick={() => (view = { name: "notifications" })}>
+          <span class="notice-head">Notifications</span>
+          <span class="grow ellipsis secondary small">{latest.title}</span>
+          <span class="tiny muted">{ago(latest.at, now)}</span>
+          <span class="see-all">›</span>
+        </button>
       {/if}
 
       {#each cards as game (game.key)}
@@ -102,6 +121,8 @@
       {:else}
         <p class="muted">All games are switched off. Turn some on in Settings.</p>
       {/each}
+    {:else if view.name === "notifications"}
+      <Notifications {snap} {now} />
     {:else if view.name === "settings"}
       <Settings {snap} {now} onEdit={(game) => (view = { name: "edit", game })} />
     {:else}

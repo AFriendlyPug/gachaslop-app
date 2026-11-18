@@ -4,7 +4,7 @@ use crate::banners::{FeedKind, FeedState, Feeds};
 use crate::config::TICK;
 use crate::games::{built_in, CustomGame, Game};
 use crate::scheduler::*;
-use crate::settings::{Settings, State};
+use crate::settings::{Notice, Settings, State};
 use crate::store::Inner;
 use crate::toast::Card;
 use crate::time::{Ts, DAY, HOUR, MINUTE};
@@ -18,6 +18,11 @@ fn new_after(games: &[Game], feeds: &Feeds, before: Ts, now: Ts) -> Vec<Event> {
     let mut state = State::default();
     seed(&mut state, &due_events(games, feeds, 0, before));
     due_events(games, feeds, 0, now).into_iter().filter(|e| !state.notified.contains_key(&e.key)).collect()
+}
+
+/// How many of a plan's notices are marked missed.
+fn missed(plan: &Plan) -> usize {
+    plan.notices.iter().filter(|n| n.missed).count()
 }
 
 fn inner(settings: Settings, feeds: Feeds) -> Inner {
@@ -42,7 +47,7 @@ fn a_weekly_reset_days_ago_is_still_reported() {
     let plan = plan(&new, &Settings::default(), utc(2026, 11, 19, 12, 0));
     assert_eq!(plan.toasts.len(), 1);
     assert_eq!(plan.toasts[0].title, "While you were away");
-    assert_eq!(plan.missed.len(), 4);
+    assert_eq!(missed(&plan), 4);
 }
 
 #[test]
@@ -140,7 +145,7 @@ fn daily_and_weekly_at_the_same_moment_are_one_toast() {
     let plan = plan(&new, &Settings::default(), monday - HOUR); // running at the time: not missed
     assert_eq!(plan.toasts, [Card::new(Some("zzz"), "Zenless Zone Zero (EU) daily and weekly reset",
                                        "Daily and weekly reset just now. Next reset in 1d 0h.")]);
-    assert!(plan.missed.is_empty());
+    assert_eq!(missed(&plan), 0);
 }
 
 #[test]
@@ -154,7 +159,7 @@ fn settings_decide_what_is_shown() {
     assert_eq!(plan(&new, &no_resets, running_since), Plan::default());
     let shown = plan(&new, &Settings::default(), running_since);
     assert_eq!(shown.toasts.len(), 2); // two games' daily resets: under the summary threshold
-    assert_eq!(shown.missed.len(), 2);
+    assert_eq!(missed(&shown), 2);
 }
 
 #[test]
@@ -257,7 +262,7 @@ fn replaying_catch_up_shows_what_is_due_again_as_missed() {
     let new: Vec<Event> = events.into_iter().filter(|e| !state.notified.contains_key(&e.key)).collect();
     let plan = plan(&new, &Settings::default(), now); // the scheduler's pass after "Replay catch-up"
     assert_eq!(plan.toasts[0].title, "While you were away");
-    assert_eq!(plan.missed.len(), new.len()); // two dailies, two weeklies and the banner, all missed
+    assert_eq!(missed(&plan), new.len()); // two dailies, two weeklies and the banner, all missed
 }
 
 #[test]
@@ -275,4 +280,34 @@ fn banner_marks_are_written_out_in_notifications() {
     feeds.ba.record(FeedKind::Ba, Ok(vec![rot]), now);
     let live = due_events(&built_in(), &feeds, 0, now).into_iter().find(|e| e.kind == Kind::BannerLive).unwrap();
     assert_eq!(live.body, "Ibuki (Swimsuit) (Fest)\nEnds in 5d 0h."); // the outfit and the marks bracketed apart
+}
+
+// ---- the Notifications list ----
+#[test]
+fn every_notification_shown_goes_in_the_list_in_full() {
+    let games = built_in();
+    let new = new_after(&games, &Feeds::default(), utc(2026, 11, 14, 12, 0), utc(2026, 11, 19, 12, 0));
+    let plan = plan(&new, &Settings::default(), utc(2026, 11, 19, 12, 0));
+    assert_eq!(plan.toasts.len(), 1); // one summary card...
+    let titles: Vec<_> = plan.notices.iter().map(|n| n.title.as_str()).collect();
+    assert_eq!(titles, ["Blue Archive (Global) has reset", "Blue Archive (Global) weekly reset",
+                        "Zenless Zone Zero (EU) has reset", "Zenless Zone Zero (EU) weekly reset"]); // ...four entries
+    assert!(plan.notices.iter().all(|n| !n.body.is_empty() && n.missed));
+}
+
+#[test]
+fn recording_notices_marks_when_they_came_in() {
+    let now = utc(2026, 11, 18, 12, 0);
+    let notice = |missed| Notice { at: now - HOUR, added: 0, game: "ba".into(), title: "Reset".into(),
+                                   body: String::new(), missed };
+    let mut state = State::default();
+    record(&mut state, vec![notice(false)], now);
+    assert_eq!(state.notices[0].added, now);
+    assert!(!state.unseen); // only missed ones light the dot
+    record(&mut state, vec![notice(true)], now + 1);
+    assert!(state.unseen);
+    assert_eq!(state.notices.len(), 2);
+    assert!(state.is_new(&state.notices[1]));
+    state.read_at = Some(now + 5);
+    assert!(!state.is_new(&state.notices[1]));
 }

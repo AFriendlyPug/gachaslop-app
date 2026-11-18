@@ -66,6 +66,20 @@ export function localTime(ts: number, now: number): string {
   return sameDay ? time : `${d.toLocaleDateString("en-GB", { weekday: "short" })} ${time}`;
 }
 
+/** Local clock time only: "19:00". */
+export function clock(ts: number): string {
+  return date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
+/** The local day `ts` falls on, for grouping a list: "Today", "Yesterday", or "Mon 16 Nov". */
+export function dayLabel(ts: number, now: number): string {
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((day(new Date(now)) - day(date(ts))) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return date(ts).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+
 /** Local date and time: "Tue 24 Nov, 02:00". */
 export function localDate(ts: number): string {
   return date(ts).toLocaleString("en-GB", {

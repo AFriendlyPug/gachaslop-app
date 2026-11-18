@@ -4,7 +4,7 @@ use crate::banners::Feeds;
 use crate::commands::*;
 use crate::games::CustomGame;
 use crate::scheduler::due_events;
-use crate::settings::{Missed, Paths, Settings, State};
+use crate::settings::{Notice, Paths, Settings, State};
 use crate::store::Inner;
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrest-of-file";
@@ -29,14 +29,15 @@ fn deleting_a_game_removes_everything_recorded_about_it() {
                                Feeds::default());
     seed_game(&mut inner, "custom-1", now);
     seed_game(&mut inner, "custom-12", now);
-    inner.state.missed = vec![Missed { at: now, game: "custom-1".into(), text: "gone".into() },
-                              Missed { at: now, game: "custom-12".into(), text: "kept".into() }];
+    let notice = |game: &str| Notice { at: now, added: now, game: game.into(), title: "Reset".into(), body: String::new(),
+                                       missed: false };
+    inner.state.notices = vec![notice("custom-1"), notice("custom-12")];
     let removed = remove_custom_game(&mut inner, "custom-1").unwrap();
     assert_eq!(removed.icon.as_deref(), Some("custom-1-5.png"));
     assert_eq!(inner.custom.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(), ["custom-12"]);
     assert!(inner.state.notified.keys().all(|k| !k.contains(":custom-1:")), "{:?}", inner.state.notified);
     assert!(inner.state.notified.keys().any(|k| k.contains(":custom-12:"))); // a similar id is untouched
-    assert_eq!(inner.state.missed.len(), 1);
+    assert_eq!(inner.state.notices.len(), 1); // its notifications go too
     assert_eq!(inner.settings.disabled_games, ["zzz"]);
     assert!(remove_custom_game(&mut inner, "custom-1").is_none());
 }

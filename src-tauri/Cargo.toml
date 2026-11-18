@@ -1,6 +1,6 @@
 [package]
 name = "gachaslop-app"
-version = "0.2.0"
+version = "0.2.1"
 description = "Tray app for gacha game resets and banners"
 authors = ["Reuben"]
 edition = "2024"

@@ -60,10 +60,15 @@ export interface FeedView {
   nextUnknownFrom: number | null;
 }
 
-export interface Missed {
-  at: number;
+/** A notification that came in (newest first in the snapshot). */
+export interface Notice {
+  at: number; // when it happened
+  added: number; // when the app noticed it: later than `at` if it was missed
   game: string;
-  text: string;
+  title: string;
+  body: string;
+  missed: boolean; // happened while the app was closed or the PC slept
+  new: boolean; // came in since the Notifications list was last opened
 }
 
 export interface Snapshot {
@@ -71,8 +76,8 @@ export interface Snapshot {
   games: GameView[];
   feeds: FeedView[];
   settings: Settings;
-  missedSince: number | null;
-  missed: Missed[];
+  notices: Notice[];
+  newNotices: number;
   requestsThisMonth: number;
 }
 
@@ -108,7 +113,8 @@ export const api = {
   snapshot: () => invoke<Snapshot>("get_snapshot"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
   refreshBanners: () => invoke<string>("refresh_banners"),
-  dismissMissed: () => invoke<void>("dismiss_missed"),
+  markNoticesRead: () => invoke<void>("mark_notices_read"),
+  clearNotices: () => invoke<void>("clear_notices"),
   setDialogOpen: (open: boolean) => invoke<void>("set_dialog_open", { open }),
   /** Send a picked image's bytes; returns the staged file's path. */
   stageGameIcon: (bytes: Uint8Array) => invoke<string>("stage_game_icon", bytes),

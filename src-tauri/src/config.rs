@@ -33,7 +33,9 @@ pub const CATCHUP_AFTER: i64 = 2 * MINUTE;
 pub const SUMMARY_FROM: usize = 3;
 /// How long reset keys stay in the notified log (banner keys go when their banner ends).
 pub const RESET_KEY_KEEP: i64 = 8 * DAY;
-pub const MAX_MISSED: usize = 30;
+/// The Notifications list keeps this long, and at most this many.
+pub const NOTICE_KEEP: i64 = 30 * DAY;
+pub const MAX_NOTICES: usize = 200;
 
 /// The scheduler never sleeps longer than this, so PC sleep and clock changes are noticed quickly.
 pub const TICK: i64 = 30;
