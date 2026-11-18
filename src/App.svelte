@@ -7,6 +7,7 @@
   import Settings from "./components/Settings.svelte";
   import GameEditor from "./components/GameEditor.svelte";
   import Notifications from "./components/Notifications.svelte";
+  import UpdateBanner from "./components/UpdateBanner.svelte";
 
   type View = { name: "home" } | { name: "settings" } | { name: "notifications" } | { name: "edit"; game: GameView | null };
 
@@ -86,6 +87,9 @@
     {#if !snap}
       <p class="muted">Loading…</p>
     {:else if view.name === "home"}
+      {#if snap.update && !snap.update.dismissed}
+        <UpdateBanner update={snap.update} current={snap.version} offline={snap.settings.offline} dismissible />
+      {/if}
       {#if fresh.length}
         <button class="card notice-home" onclick={() => (view = { name: "notifications" })}>
           <span class="row">

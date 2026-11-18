@@ -10,6 +10,7 @@ export interface Settings {
   catchup: boolean;
   offline: boolean;
   autostart: boolean;
+  updateChecks: boolean; // look for a new version once a day (never installs by itself)
 }
 
 export interface GameView {
@@ -71,7 +72,21 @@ export interface Notice {
   new: boolean; // came in since the Notifications list was last opened
 }
 
+/** A newer version on GitHub (see src-tauri/src/update.rs). */
+export interface UpdateView {
+  version: string;
+  page: string;
+  installer: string;
+  size: number;
+  sha256: string | null;
+  published: number | null;
+  dismissed: boolean; // "Not now" on its banner
+}
+
 export interface Snapshot {
+  version: string; // this build's
+  update: UpdateView | null;
+  updateChecked: number | null;
   now: number;
   games: GameView[];
   feeds: FeedView[];
@@ -128,7 +143,11 @@ export const api = {
   replayCatchup: () => invoke<void>("replay_catchup"),
   setTrayOnly: (on: boolean) => invoke<void>("set_tray_only", { on }),
   diagnostics: () => invoke<Diagnostics>("diagnostics"),
-  openPath: (what: "data" | "log") => invoke<void>("open_path", { what }),
+  openPath: (what: "data" | "log" | "release") => invoke<void>("open_path", { what }),
+  checkForUpdate: () => invoke<string>("check_for_update"),
+  /** Downloads and runs the installer; the app closes on success, so this only returns on failure. */
+  installUpdate: () => invoke<void>("install_update"),
+  dismissUpdate: () => invoke<void>("dismiss_update"),
   hide: () => invoke<void>("hide_popup"),
   quit: () => invoke<void>("quit"),
 };

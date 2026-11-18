@@ -151,6 +151,10 @@ button.bell { position: relative; }
 .pill.new { background: var(--accent); color: var(--accent-text); }
 .empty { display: flex; flex-direction: column; gap: 4px; }
 
+/* ---- update available ---- */
+.update-banner { display: flex; flex-direction: column; gap: 8px; border-color: var(--accent); background: var(--accent-soft); }
+.update-title { font-size: 15px; font-weight: 600; }
+
 /* ---- game cards ---- */
 .game { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
 .game-head { display: flex; align-items: center; gap: 12px; }

@@ -9,14 +9,16 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::autostart;
 use crate::banners::{data_runs_out, image_ext, is_image, mark_words, write_atomic, FeedKind, Pick};
-use crate::config::MAX_ICON_BYTES;
+use crate::config::{MAX_ICON_BYTES, RELEASES_PAGE};
 use crate::games::{next_reset, next_weekly, CustomGame, Game, GameInput};
-use crate::scheduler::{due_events, forget, sample_toast, seed, Sample};
+use crate::logs;
+use crate::scheduler::{self, due_events, forget, sample_toast, seed, Sample};
 use crate::settings::{Notice, Paths, Settings};
 use crate::store::{Inner, Store};
 use crate::time::{now, now_millis, Ts};
 use crate::toast;
 use crate::tray::{self, DIALOG_OPEN};
+use crate::update::{self, is_newer, Release, CURRENT};
 use crate::widget;
 
 type Store_<'a> = State<'a, Arc<Store>>;
@@ -80,7 +82,18 @@ pub struct NoticeView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UpdateView {
+    #[serde(flatten)]
+    release: Release,
+    dismissed: bool, // "Not now" on its banner: still offered in Settings
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Snapshot {
+    version: &'static str,
+    update: Option<UpdateView>,
+    update_checked: Option<Ts>,
     now: Ts,
     games: Vec<GameView>,
     feeds: Vec<FeedView>,
@@ -135,7 +148,11 @@ fn snapshot(paths: &Paths, inner: &Inner) -> Snapshot {
         .map(|n| NoticeView { notice: n.clone(), new: inner.state.is_new(n) }).collect();
     notices.sort_by_key(|v| std::cmp::Reverse((v.notice.at, v.notice.added)));
     let new_notices = notices.iter().filter(|v| v.new).count();
+    let update = inner.state.update.clone().filter(|r| is_newer(&r.version, CURRENT)).map(|release| UpdateView {
+        dismissed: inner.state.update_dismissed.as_deref() == Some(release.version.as_str()), release,
+    });
     Snapshot {
+        version: CURRENT, update, update_checked: inner.state.update_checked,
         now, games, feeds, settings: inner.settings.clone(), notices, new_notices,
         requests_this_month: inner.state.requests_this_month(now),
     }
@@ -439,7 +456,64 @@ pub fn open_path(app: AppHandle, store: Store_<'_>, what: String) -> Result<(), 
     let path = match what.as_str() {
         "data" => store.paths.root.clone(),
         "log" => app.path().app_log_dir().map_err(|e| e.to_string())?.join("GachaSlop.log"),
+        // the new version's page if there is one, otherwise all releases (to download an installer by hand)
+        "release" => store.lock().state.update.as_ref().map_or(RELEASES_PAGE.into(), |r| r.page.clone()).into(),
         _ => return Err("Unknown place.".into()),
     };
     std::process::Command::new("explorer.exe").arg(path).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+// ---- updates: only ever when the user asks (see update.rs) -------------------------------------------
+/// "Check now" in Settings. Returns what was found, for the popup to show.
+#[tauri::command]
+pub async fn check_for_update(app: AppHandle) -> Result<String, String> {
+    let handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        scheduler::check_update(&handle, &handle.state::<Arc<Store>>(), true)
+    }).await.map_err(|e| e.to_string())?;
+    match result {
+        Ok(Some(r)) => Ok(format!("Version {} is available.", r.version)),
+        Ok(None) => Ok(format!("You have the latest version ({CURRENT}).")),
+        Err(err) => Err(format!("Couldn't check for updates: {err}")),
+    }
+}
+
+/// "Install update": download the new installer, check it, run it, and close so it can replace the app.
+/// The installer starts the new version when it's done.
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    let installer = tauri::async_runtime::spawn_blocking(move || {
+        let store = handle.state::<Arc<Store>>();
+        let (release, offline) = {
+            let inner = store.lock();
+            (inner.state.update.clone(), inner.settings.offline)
+        };
+        if offline {
+            return Err("Offline mode is on. Turn it off to download the update.".to_string());
+        }
+        let release = release.filter(|r| is_newer(&r.version, CURRENT)).ok_or("There's no update to install.")?;
+        logs::info(format!("Downloading version {}", release.version));
+        let dir = store.paths.updates();
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let result = update::download(&release, &dir);
+        let mut inner = store.lock();
+        inner.state.count_request(now());
+        store.save_state(&inner);
+        result
+    }).await.map_err(|e| e.to_string())??;
+    update::run_installer(&installer).map_err(|e| format!("Couldn't start the installer ({e})"))?;
+    logs::info("Installer started; closing for it");
+    tray::quit(&app, &app.state::<Arc<Store>>());
+    Ok(())
+}
+
+/// "Not now" on the update banner: hide it for this version (Settings still offers it).
+#[tauri::command]
+pub fn dismiss_update(app: AppHandle, store: Store_<'_>) {
+    let mut inner = store.lock();
+    inner.state.update_dismissed = inner.state.update.as_ref().map(|r| r.version.clone());
+    store.save_state(&inner);
+    drop(inner);
+    changed(&app, &store);
 }

@@ -43,6 +43,7 @@ A small Windows app that counts down to game resets and shows the current and up
 - **Your own games:** add any game with an icon, a name and its reset time in UTC (plus an optional weekly reset day); the form shows what that is in your time. Added games get reset notifications but no banners.
 - **Works offline:** banners and icons are stored locally. Offline mode (Settings or the tray menu) stops all network requests.
 - **Start with Windows** (optional): starts hidden in the tray.
+- **Updates, only when you say so:** once a day (or with Check now in Settings) the app asks GitHub whether there's a newer release and, if so, shows a banner. Install update downloads the new installer, checks it's exactly the file GitHub lists (size and SHA-256) and updates in place with just a progress window; GachaSlop closes and opens again by itself. Nothing is ever downloaded or installed without you choosing to, the daily check can be switched off, and you can always download the installer yourself instead.
 - **Testing** (bottom of Settings): show any kind of notification card now (marked [Test]), replay catch-up as if you'd just come back, switch to the tray icon to try the fallback, see how the widget is shown, and open the data folder or log. None of it uses the network.
 
 Built-in games:
@@ -62,8 +63,9 @@ The app makes as few requests as possible. Banner lists are stored and only fetc
 - **Zenless Zone Zero:** the source only lists the current phase, so it's checked once when that phase ends. If the new phase isn't listed yet, it tries again after 30 minutes, 2 hours, 6 hours, then every 12 hours.
 - **Icons** are downloaded once per character and deleted when no stored banner uses them.
 - **Refresh banners** does nothing if the lists were fetched in the last 5 minutes.
+- **Updates:** one request to GitHub a day to see if there's a new version (no sooner than 10 minutes after starting; can be switched off). The installer is only downloaded when you choose Install update.
 
-Nothing is fetched at startup, on waking, or on opening the popup. Settings shows the number of requests this month.
+Nothing is fetched at startup, on waking, or on opening the popup. Offline mode stops all of it, update checks included. Settings shows the number of requests this month.
 
 ## Where things are kept
 
@@ -73,7 +75,7 @@ Nothing is fetched at startup, on waking, or on opening the popup. Settings show
 
 Kept to a minimum. Rust uses only `tauri`, `serde`, `serde_json` and `windows-sys` (for the taskbar widget and notification cards; Tauri already builds it, so it adds nothing new). Everything else is the app's own code or a tool built into Windows:
 
-- downloads go through Windows' `curl.exe` (Windows 10 1803 and later);
+- downloads go through Windows' `curl.exe` (Windows 10 1803 and later), and update downloads are checked with Windows' `certutil.exe`;
 - the taskbar widget and notification cards are drawn with Windows' GDI and GDI+ (which also reads the game icons);
 - "Start with Windows" is a `HKCU\...\Run` entry written with `reg.exe`;
 - dates, logging, the one-copy-at-a-time check (a local port, 47613) and popup placement are small modules in `src-tauri/src`.

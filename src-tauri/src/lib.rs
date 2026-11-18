@@ -6,6 +6,7 @@ mod logs;
 mod net;
 mod games;
 mod banners;
+mod update;
 mod settings;
 mod store;
 mod autostart;
@@ -43,6 +44,9 @@ pub fn run() {
             commands::refresh_banners,
             commands::mark_notices_read,
             commands::clear_notices,
+            commands::check_for_update,
+            commands::install_update,
+            commands::dismiss_update,
             commands::set_dialog_open,
             commands::stage_game_icon,
             commands::discard_staged,
@@ -64,6 +68,7 @@ pub fn run() {
             std::fs::create_dir_all(&paths.root)?;
             let store = Arc::new(Store::open(paths));
             commands::clear_staged(&store.paths); // icons picked for a game that was never saved
+            let _ = std::fs::remove_dir_all(store.paths.updates()); // an installer already run, or abandoned
             {
                 // the registry is the truth for "Start with Windows" (it can be turned off in Task Manager)
                 let mut inner = store.lock();

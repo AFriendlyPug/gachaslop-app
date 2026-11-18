@@ -9,6 +9,7 @@ mod system;
 mod time;
 mod toast;
 mod tray;
+mod update;
 mod widget;
 
 use std::path::{Path, PathBuf};

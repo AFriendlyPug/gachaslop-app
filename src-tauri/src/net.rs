@@ -24,15 +24,22 @@ pub fn hidden(program: &str) -> Command {
     command
 }
 
-/// Arguments for one quiet GET that fails on HTTP errors, follows redirects and accepts gzip.
-pub fn curl_args(url: &str) -> Vec<String> {
-    ["-sS", "-f", "-L", "--compressed", "--max-time", &HTTP_TIMEOUT_SECS.to_string(), "-A", USER_AGENT, "--", url]
+/// Arguments for one quiet GET that fails on HTTP errors, follows redirects and accepts gzip, giving up
+/// after `seconds`.
+pub fn curl_args(url: &str, seconds: u32) -> Vec<String> {
+    ["-sS", "-f", "-L", "--compressed", "--max-time", &seconds.to_string(), "-A", USER_AGENT, "--", url]
         .map(String::from).to_vec()
 }
 
 /// Download `url`. Any failure (no network, HTTP error, curl missing) comes back as a short message.
 pub fn get(url: &str) -> Result<Vec<u8>, String> {
-    let output = hidden("curl.exe").args(curl_args(url)).output().map_err(|e| format!("could not run curl ({e})"))?;
+    get_within(url, HTTP_TIMEOUT_SECS)
+}
+
+/// get(), allowing longer for something big (an update's installer).
+pub fn get_within(url: &str, seconds: u32) -> Result<Vec<u8>, String> {
+    let output = hidden("curl.exe").args(curl_args(url, seconds)).output()
+        .map_err(|e| format!("could not run curl ({e})"))?;
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if err.is_empty() { format!("curl failed ({})", output.status) } else { err });

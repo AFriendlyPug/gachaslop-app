@@ -37,6 +37,7 @@ GitHub builds only on version tags (a Release with the installer) or the "Run wo
 - `net.rs`: HTTP GET through Windows' own `curl.exe`, and `hidden()` for running System32 tools without a console window.
 - `games.rs`: built-in games (BA 19:00 UTC weekly Sunday; ZZZ EU 03:00 UTC weekly Monday), `CustomGame`, reset maths (`next_reset`, `last_reset`, `next_weekly`, `ordered`).
 - `banners.rs`: `FeedKind`, `Rotation`, `FeedState`, both parsers, when to fetch (`data_runs_out`, `record`), icon download and `prune_icons`.
+- `update.rs`: new versions from GitHub Releases: `check()` (latest release, `is_newer` than `CURRENT`), `download()` (only from this repo's release URLs; size, `MZ` and SHA-256 via `certutil` checked) and `run_installer()` (NSIS `/P /UPDATE /R`). Never installs by itself.
 - `settings.rs`: `Settings`, `State`, `Paths`, JSON load/save (atomic; an unreadable file is renamed `.bad` and defaults are used).
 - `store.rs`: `Store`, the shared in-memory copy of everything, with a `Condvar` to wake the scheduler.
 - `autostart.rs`: "Start with Windows" via `reg.exe` on `HKCU\...\Run`.
@@ -64,7 +65,8 @@ Everything is UTC (`Ts`, Unix seconds) in Rust, in saved files and over IPC. The
 Banners are stored in `banners.json` and fetched only when the stored data runs out, never on a timer, at startup, on wake or on opening the popup:
 - BA (`ba.joexyz.online`): future banners are projections from the JP schedule, so the feed is checked as each stored upcoming banner is due to start, and a "banner live" toast only fires once a fetch made after its start still lists it (`FeedState::confirmed`).
 - ZZZ (`api.ennead.cc`): lists only the current phase, so it's checked when that phase ends. Each S-rank agent gets the S-rank W-Engine of the same specialty (`pair_engines`, stored as `Pick::engine`); any left over stay in `Rotation::extras`.
-- Nothing new or a failure: back off 30 min, 2 h, 6 h, then every 12 h. Manual refresh is skipped if fetched under 5 minutes ago. Offline mode makes no requests at all.
+- Nothing new or a failure: back off 30 min, 2 h, 6 h, then every 12 h. Manual refresh is skipped if fetched under 5 minutes ago.
+- Updates: `scheduler::check_update` asks GitHub once a day (`update_due`; off with `Settings::update_checks`, never within 10 minutes of starting, retried after 2 h on failure) and only records a newer `Release` in `state.json` for the popup's banner. The installer is downloaded to `updates\` (emptied at startup) only by the `install_update` command, which then runs it and quits; the installer restarts the app. The version comes from `Cargo.toml`, so keep it in step with `tauri.conf.json` and `package.json` when releasing. Offline mode makes no requests at all.
 - Icons are downloaded once for current and upcoming banners and deleted when no stored banner uses them.
 
 ### Notifications and catch-up

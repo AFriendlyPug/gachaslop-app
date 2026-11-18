@@ -1,0 +1,24 @@
+{
+  "tag_name": "v0.2.1",
+  "name": "GachaSlop v0.2.1",
+  "html_url": "https://github.com/AFriendlyPug/gachaslop-app/releases/tag/v0.2.1",
+  "published_at": "2026-11-18T05:35:50Z",
+  "draft": false,
+  "prerelease": false,
+  "assets": [
+    {
+      "name": "gachaslop-app_windows_x64.exe",
+      "size": 3668480,
+      "digest": "sha256:b0bb656a549ea8ff20cd4cf816d74b26bbd3d12de30b148a2af9368f0af6a9cd",
+      "browser_download_url": "https://github.com/AFriendlyPug/gachaslop-app/releases/download/v0.2.1/gachaslop-app_windows_x64.exe",
+      "content_type": "application/zip"
+    },
+    {
+      "name": "GachaSlop_0.2.1_x64-setup.exe",
+      "size": 1415511,
+      "digest": "sha256:e9c13c97d3b626f724a0c190ae03d494b873fb27297a3601215b74617548f321",
+      "browser_download_url": "https://github.com/AFriendlyPug/gachaslop-app/releases/download/v0.2.1/GachaSlop_0.2.1_x64-setup.exe",
+      "content_type": "application/zip"
+    }
+  ]
+}

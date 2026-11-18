@@ -56,6 +56,17 @@ pub const TOAST_FADE_OUT: Duration = Duration::from_millis(260);
 /// many lines at most.
 pub const TOAST_MERGED_LINES: usize = 4;
 
+/// Updates (update.rs): GitHub's latest release of this app, where its installers may come from, how long
+/// a download may take, and how often to check when the user allows it (a failed check tries again sooner).
+pub const RELEASES_LATEST_URL: &str = "https://api.github.com/repos/AFriendlyPug/gachaslop-app/releases/latest";
+pub const RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/AFriendlyPug/gachaslop-app/releases/download/";
+pub const UPDATE_DOWNLOAD_TIMEOUT_SECS: u32 = 300;
+pub const UPDATE_CHECK_EVERY: i64 = DAY;
+pub const UPDATE_RETRY: i64 = 2 * HOUR;
+/// The update check never runs sooner than this after the app starts: startup makes no requests.
+pub const UPDATE_START_DELAY: i64 = 10 * MINUTE;
+pub const RELEASES_PAGE: &str = "https://github.com/AFriendlyPug/gachaslop-app/releases";
+
 /// Custom game icons: largest file accepted.
 pub const MAX_ICON_BYTES: usize = 1_000_000;
 pub const MAX_GAME_NAME: usize = 40;

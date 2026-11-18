@@ -7,6 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::banners::{write_atomic, Feeds};
+use crate::update::Release;
 use crate::config::{MAX_HEADSUP_MINUTES, MAX_NOTICES, NOTICE_KEEP};
 use crate::games::CustomGame;
 use crate::logs;
@@ -22,12 +23,13 @@ pub struct Settings {
     pub catchup: bool,               // show what was missed while the app was closed
     pub offline: bool,               // make no network requests at all
     pub autostart: bool,
+    pub update_checks: bool,         // look for a new version once a day (never installs by itself)
 }
 
 impl Default for Settings {
     fn default() -> Settings {
         Settings { disabled_games: vec![], reset_toasts: true, headsup_minutes: 0, banner_toasts: true,
-                   catchup: true, offline: false, autostart: false }
+                   catchup: true, offline: false, autostart: false, update_checks: true }
     }
 }
 
@@ -76,6 +78,9 @@ pub struct State {
     #[serde(skip_serializing)]
     pub missed: Vec<Missed>,             // from earlier versions only, see State::upgrade
     pub unseen: bool,                    // missed items the popup hasn't shown yet (tray dot)
+    pub update: Option<Release>,         // a newer version found by the last check
+    pub update_checked: Option<Ts>,      // when to count the next daily check from
+    pub update_dismissed: Option<String>, // "Not now" on this version's banner
     pub request_month: String,           // "2026-11"
     pub requests: u32,                   // network requests made in request_month
 }
@@ -129,6 +134,7 @@ impl Paths {
     pub fn banners(&self) -> PathBuf { self.root.join("banners.json") }
     pub fn icons(&self) -> PathBuf { self.root.join("icons") }
     pub fn game_icons(&self) -> PathBuf { self.root.join("game-icons") }
+    pub fn updates(&self) -> PathBuf { self.root.join("updates") } // downloaded installers, emptied at startup
 }
 
 /// Read a JSON file, or the default if it's missing or unreadable (logged, and the bad file kept aside).

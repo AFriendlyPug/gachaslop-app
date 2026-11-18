@@ -5,7 +5,8 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
 use crate::banners::{self, mark_words, missing_icons, prune_icons, FeedKind, Feeds};
-use crate::config::{CATCHUP_AFTER, ENDING_WARNING, HEARTBEAT, RESET_KEY_KEEP, SUMMARY_FROM, TICK, WAKE_GAP};
+use crate::config::{CATCHUP_AFTER, ENDING_WARNING, HEARTBEAT, RESET_KEY_KEEP, SUMMARY_FROM, TICK, UPDATE_CHECK_EVERY,
+                    UPDATE_RETRY, UPDATE_START_DELAY, WAKE_GAP};
 use crate::games::{is_weekly_moment, last_reset, last_weekly, next_reset, Game};
 use crate::logs;
 use crate::settings::{keep_notices, Notice, Settings, State};
@@ -13,6 +14,7 @@ use crate::store::{Inner, Store};
 use crate::time::{fmt_duration, now, Ts, DAY, MINUTE};
 use crate::toast::{self, Card};
 use crate::tray;
+use crate::update;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -153,7 +155,48 @@ pub fn record(state: &mut State, notices: Vec<Notice>, now: Ts) {
     keep_notices(&mut state.notices, now);
 }
 
-/// The next moment something could become due: a reset, heads-up, banner change or feed check.
+/// When the daily update check is next due: None if the user turned checks off or is offline.
+pub fn update_due(settings: &Settings, state: &State) -> Option<Ts> {
+    (settings.update_checks && !settings.offline).then(|| state.update_checked.map_or(0, |t| t + UPDATE_CHECK_EVERY))
+}
+
+/// Record an update check: a newer release is kept for the banner (a failure keeps what was known and
+/// tries again in a couple of hours rather than tomorrow).
+pub fn record_update_check(state: &mut State, result: Result<Option<update::Release>, String>, now: Ts) {
+    match result {
+        Ok(found) => (state.update, state.update_checked) = (found, Some(now)),
+        Err(_) => state.update_checked = Some(now - UPDATE_CHECK_EVERY + UPDATE_RETRY),
+    }
+}
+
+/// Look for a new version if the daily check is due. Only notes it: installing is up to the user.
+pub fn check_update(app: &AppHandle, store: &Store, force: bool) -> Result<Option<update::Release>, String> {
+    let due = {
+        let inner = store.lock();
+        if inner.settings.offline {
+            return Err("Offline mode is on.".into());
+        }
+        force || update_due(&inner.settings, &inner.state).is_some_and(|at| at <= now())
+    };
+    if !due {
+        return Ok(None);
+    }
+    let result = update::check();
+    match &result {
+        Ok(Some(r)) => logs::info(format!("Version {} is available", r.version)),
+        Ok(None) => logs::info("No newer version"),
+        Err(err) => logs::warn(format!("Could not check for updates ({err})")),
+    }
+    let mut inner = store.lock();
+    inner.state.count_request(now());
+    record_update_check(&mut inner.state, result.clone(), now());
+    store.save_state(&inner);
+    drop(inner);
+    let _ = app.emit("state-changed", ());
+    result
+}
+
+/// The next moment something could become due: a reset, heads-up, banner change, feed or update check.
 pub fn next_due(games: &[Game], feeds: &Feeds, settings: &Settings, now: Ts) -> Ts {
     let mut times = vec![now + TICK];
     for g in games {
@@ -317,6 +360,7 @@ fn notify(app: &AppHandle, store: &Store, running_since: Ts) {
 pub fn run(app: AppHandle, store: Arc<Store>) {
     let mut running_since = now();
     let mut last_pass = running_since;
+    let updates_from = running_since + UPDATE_START_DELAY;
     let mut last_heartbeat: Option<Ts> = None;
     loop {
         let start = now();
@@ -328,6 +372,9 @@ pub fn run(app: AppHandle, store: Arc<Store>) {
         }
         last_pass = start;
         check_feeds(&app, &store); // first, so a banner it finds joins the same catch-up
+        if now() >= updates_from {
+            let _ = check_update(&app, &store, false);
+        }
         notify(&app, &store, running_since);
         tray::sync(&app, &store);
         let now = now();
@@ -339,7 +386,8 @@ pub fn run(app: AppHandle, store: Arc<Store>) {
         }
         let wake_at = {
             let inner = store.lock();
-            next_due(&inner.enabled_games(), &inner.feeds, &inner.settings, now)
+            let next = next_due(&inner.enabled_games(), &inner.feeds, &inner.settings, now);
+            update_due(&inner.settings, &inner.state).map_or(next, |at| next.min(at.max(updates_from).max(now + 1)))
         };
         store.sleep(wake_at - crate::time::now());
     }

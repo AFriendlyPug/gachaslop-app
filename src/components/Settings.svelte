@@ -2,9 +2,23 @@
   import { api, type Diagnostics, type GameView, type Sample, type Settings, type Snapshot } from "../lib/api";
   import { ago, resetText, until } from "../lib/time";
   import GameBadge from "./GameBadge.svelte";
+  import UpdateBanner from "./UpdateBanner.svelte";
 
   let { snap, now, onEdit }: { snap: Snapshot; now: number; onEdit: (game: GameView | null) => void } = $props();
   let error = $state("");
+  let updateMessage = $state("");
+  let checking = $state(false);
+
+  async function checkNow() {
+    checking = true;
+    updateMessage = "";
+    try {
+      updateMessage = await api.checkForUpdate();
+    } catch (e) {
+      updateMessage = String(e);
+    }
+    checking = false;
+  }
 
   async function save(change: Partial<Settings>) {
     error = "";
@@ -119,6 +133,27 @@
   {@render toggle("Start with Windows", "Starts on the taskbar when you sign in.", snap.settings.autostart,
                   (on) => save({ autostart: on }))}
   {#if error}<p class="error">{error}</p>{/if}
+</section>
+
+<section class="group">
+  <h2>Updates</h2>
+  {#if snap.update}
+    <UpdateBanner update={snap.update} current={snap.version} offline={snap.settings.offline} />
+  {/if}
+  <div class="setting">
+    <span class="grow">
+      <span class="setting-name block">GachaSlop {snap.version}</span>
+      <span class="setting-hint block">
+        {snap.updateChecked ? `Checked for updates ${ago(snap.updateChecked, now)}.` : "Not checked for updates yet."}
+        {#if updateMessage}<br />{updateMessage}{/if}
+      </span>
+    </span>
+    <button disabled={checking || snap.settings.offline} onclick={checkNow}>{checking ? "Checking…" : "Check now"}</button>
+  </div>
+  {@render toggle("Check for updates daily",
+                  "One small request to GitHub a day. Nothing is downloaded or installed unless you choose Install.",
+                  snap.settings.updateChecks, (on) => save({ updateChecks: on }))}
+  <p class="small muted">Prefer to do it yourself? <button class="link" onclick={() => api.openPath("release")}>Download the installer from GitHub</button></p>
 </section>
 
 <section class="group">
