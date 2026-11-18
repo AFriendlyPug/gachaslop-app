@@ -269,4 +269,10 @@ fn banner_marks_are_written_out_in_notifications() {
     feeds.ba.record(FeedKind::Ba, Ok(vec![rot]), now);
     let live = due_events(&built_in(), &feeds, 0, now).into_iter().find(|e| e.kind == Kind::BannerLive).unwrap();
     assert_eq!(live.body, "Rio (Fest, Free pulls)\nEnds in 5d 0h.");
+
+    let mut rot = rotation(FeedKind::Ba, now - DAY, now + 5 * DAY, "Ibuki (Swimsuit)");
+    rot.picks[0].marks = "\u{1f31f}".into();
+    feeds.ba.record(FeedKind::Ba, Ok(vec![rot]), now);
+    let live = due_events(&built_in(), &feeds, 0, now).into_iter().find(|e| e.kind == Kind::BannerLive).unwrap();
+    assert_eq!(live.body, "Ibuki (Swimsuit, Fest)\nEnds in 5d 0h."); // one set of brackets
 }

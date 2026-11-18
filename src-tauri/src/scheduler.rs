@@ -77,7 +77,11 @@ pub fn due_events(games: &[Game], feeds: &Feeds, headsup_minutes: u32, now: Ts) 
         for rot in feed.rotations.iter().filter(|r| r.is_live(now)) {
             let names = rot.picks.iter().map(|p| match mark_words(&p.marks).as_slice() {
                 [] => p.name.clone(),
-                words => format!("{} ({})", p.name, words.join(", ")),
+                // "Ibuki (Swimsuit)" with Fest is "Ibuki (Swimsuit, Fest)", not two sets of brackets
+                words => match p.name.strip_suffix(')') {
+                    Some(name) => format!("{name}, {})", words.join(", ")),
+                    None => format!("{} ({})", p.name, words.join(", ")),
+                },
             }).collect::<Vec<_>>().join(", ");
             let left = fmt_duration(rot.end - now);
             if feed.confirmed(rot) {

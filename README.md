@@ -2,6 +2,33 @@
 
 A small Windows app that counts down to game resets and shows the current and upcoming banners for Blue Archive and Zenless Zone Zero. It sits on the taskbar next to the clock, showing the next two resets (`BA 02:15:07`, `ZZZ 10:15:07`); click it for the popup, right-click for the menu. Small cards pop up above it when a game resets or a banner goes live.
 
+<p align="center">
+  <img src="docs/screenshots/popup-dark.png" width="340" alt="The popup in dark mode: Blue Archive and Zenless Zone Zero cards with daily and weekly reset countdowns and the current banners">
+  &nbsp;
+  <img src="docs/screenshots/popup-light.png" width="340" alt="The same popup in light mode">
+</p>
+
+## Screenshots
+
+**On the taskbar**, just left of the clock, the next two resets tick down. Click for the popup, right-click for the menu.
+
+<img src="docs/screenshots/widget.png" width="164" alt="Taskbar widget showing BA 14:02:34 and ZZZ 22:02:34">
+
+**Notification cards** appear above the widget (or beside the popup), with the game's icon, then fade after a few seconds. Several at once become one card. These were made with the Testing buttons in Settings, hence "[Test]".
+
+<p>
+  <img src="docs/screenshots/card-reset.png" width="392" alt="Card: Blue Archive (Global) has reset. Reset 9h 58m ago. Next reset in 14h 3m.">
+  <img src="docs/screenshots/card-banner.png" width="392" alt="Card: New Blue Archive banner, listing Ibuki, Neru, Rio and Iroha with when it ends">
+  <img src="docs/screenshots/card-summary.png" width="392" alt="Card: While you were away, listing missed resets one per line">
+</p>
+
+| Upcoming banners | Settings |
+|---|---|
+| <img src="docs/screenshots/upcoming.png" width="340" alt="Upcoming banners opened into a timeline: each banner's start date, length and characters"> | <img src="docs/screenshots/settings.png" width="340" alt="Settings: games with their reset times, and notification switches with a line explaining each"> |
+| Closed, it previews the next banner; open, it's a timeline of every announced one. | Every setting says what it does. A Testing section at the bottom tries notifications and catch-up on demand. |
+
+Screenshots taken on 18 November 2026 with the banner data stored at the time.
+
 ## Features
 
 - **Taskbar widget:** the two soonest resets, ticking as HH:MM:SS, drawn on the taskbar just left of the clock (the same idea as [Wireless Battery](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor)). With several screens, every screen's taskbar gets its own copy, left of that taskbar's clock, so the countdowns stay in view while a game runs full screen on another screen; clicking one opens the popup on that screen. It follows the taskbar's light or dark theme, shows a red dot when there's something you missed, and comes back by itself if Explorer restarts or a screen is plugged in. If the taskbar is vertical or set to auto-hide, a tray icon is used instead.
